@@ -1,0 +1,139 @@
+html, body {
+    height: 100%;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+* {
+	font-size: 10pt;
+    font-family: sans-serif;
+}
+
+#Chat_Container {
+	position: absolute;
+	height: 100%;
+	width: 100%;
+	overflow: hidden;
+}
+
+#Chat_Bubbles {
+	position: absolute;
+	overflow-y: scroll;
+	display: flex;
+	flex-direction: column;
+	
+	left: 0;
+	right: 0;
+	top: 0;
+	bottom: 6em;
+	padding: 0 0.5em;
+	
+}
+
+#Chat_Bubbles .Message_Container {
+	display: flex;
+	margin: 0 0 0.5em 0;
+	flex-shrink: 0;
+}
+
+#Chat_Bubbles .Message_Container .Author {
+	max-width: 8em;
+	flex-shrink: 0;
+	padding: 0.5em;
+}
+
+#Chat_Bubbles .Message_Container .Message {
+	display: flex;
+	justify-content: space-between;
+	width: 100%;
+	background-color: #d2e5ff;
+	border-radius: 0.5em;
+	padding: 0.5em;
+	margin: 0;
+	word-wrap:break-word;
+	white-space: pre-line;
+}
+
+#Chat_Bubbles .Message_Container .Timestamp {
+	flex-shrink: 0;
+}
+
+.Own_Message .Author {
+	/*order: 1;*/
+}
+.Own_Message .Message {
+	background-color: #cbffc4 !important;
+}
+.Info .Message {
+	background-color: #ffffa1 !important;
+}
+.Warning .Message {
+	background-color: #ff8a8a !important;
+}
+.Error .Message {
+	background-color: #f00 !important;
+	color: #fff;
+}
+
+#Chat_Userlist_Container {
+	position: absolute;
+	color: #fff;
+	background-color: rgba(0, 0, 0, 0.85);
+	text-align: center;
+	
+	top:0; left:0; right:0; bottom:0;
+	
+	padding: 0.5em;
+	font-size: 30pt;
+    font-family: sans-serif;
+}
+
+#Chat_Userlist {
+	text-align: left;
+	font-size: 15pt;
+    font-family: sans-serif;
+}
+
+#Chat_Userlist li a{
+	font-size: 15pt;
+    font-family: sans-serif;
+}
+
+#Chat_Disconnected {
+	position: absolute;
+	color: #fff;
+	background-color: rgba(255, 0, 0, 0.75);
+	text-align: center;
+	
+	top:0; left:0; right:0; bottom:0;
+	
+	font-size: 30pt;
+    font-family: sans-serif;
+}
+
+#Chat_Input {
+	position: absolute;
+	bottom: 0;
+	right: 0;
+	left: 0;
+	height: 6em;
+	display: flex;
+	justify-content: space-around;
+	
+	background-color: #e0ffdc;
+}
+
+#Chat_Input textarea {
+	width: 100%;
+	height: 100%;
+	
+	background-color: #cbffc4;
+	
+	resize: none;
+	
+	border: 0;
+	margin: 0;
+	padding: 0;
+}
