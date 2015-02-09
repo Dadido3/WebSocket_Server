@@ -47,7 +47,10 @@
 ; 
 ; - V0.991 (09.02.2015)
 ;   - Changed endian conversion from bitshifting to direct memory access to make the include working with x86.
-
+; 
+; - V0.992 (09.02.2015)
+;   - Added #Frame_Payload_Max do prevent clients to be make the server allocate alot of memory.
+;   - Some other small bugfixes.
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -82,6 +85,8 @@ DeclareModule WebSocket_Server
   #RSV2 = %00000010
   #RSV3 = %00000001
   
+  #Frame_Payload_Max = 10000000  ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected
+  
   ; ##################################################### Public Structures ###########################################
   
   Structure Event_Frame
@@ -101,11 +106,11 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Procedures (Declares) ################################
   
-  Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null)                       ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
+  Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
   Declare   Free(*Object)                                                                   ; Closes the WebSocket server
   
   Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       ; Sends a text-frame
-  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.i)  ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary
+  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)  ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary
    
   Declare   Event_Callback(*Object, *Callback.Event_Callback)                               ; Checks for events, and calls the *Callback function if there are any.
   
@@ -169,7 +174,7 @@ Module WebSocket_Server
     RxTx_Size.i             ; Size of the frame (Header + Payload)
     
     Payload_Pos.i
-    Payload_Size.i
+    Payload_Size.q          ; Quad, because a frame can be 2^64B large.
     
     Done.l                  ; #True --> All data sent or received
   EndStructure
@@ -198,6 +203,8 @@ Module WebSocket_Server
     List Client.Client()
     
     *Event_Thread_Callback.Event_Callback
+    
+    Frame_Payload_Max.q     ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected
     
     Mutex.i
     
@@ -395,6 +402,13 @@ Module WebSocket_Server
         *Client\RX_Frame()\RxTx_Size = 2
       EndIf
       
+      ; #### Check if the frame exceeds the max. frame-size
+      If *Client\RX_Frame()\Payload_Size > *Object\Frame_Payload_Max
+        *Client\Close = #True
+        Break
+      EndIf
+      
+      ;TODO: Make this simliar to the allocation in Thread_Receive_Handshake()
       ; #### Manage memory
       If Not *Client\RX_Frame()\Data
         *Client\RX_Frame()\Data = AllocateMemory(#Frame_Data_Size_Min)
@@ -621,7 +635,7 @@ Module WebSocket_Server
     FreeStructure(*Object)
   EndProcedure
   
-  Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.i)
+  Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
     Protected *Pointer.Ascii
     Protected *Eight_Bytes.Eight_Bytes
     
@@ -730,6 +744,8 @@ Module WebSocket_Server
     
     LockMutex(*Object\Mutex)
     
+    ;TODO: Rework how the events are handled internally, right now it's too hackish.
+    
     ForEach *Object\Client()
       
       Select *Object\Client()\Event
@@ -761,11 +777,15 @@ Module WebSocket_Server
       ; #### Event: Close connection (Initiated by the server-side)
       If *Object\Client()\Close
         ; #### Only close the connection if there are no frames left.
-        If ListSize(*Object\Client()\TX_Frame()) = 0 And ListSize(*Object\Client()\RX_Frame()) = 0
-          ; #### Send event, but only if there was a connect event for this client before
+        If ListSize(*Object\Client()\TX_Frame()) = 0; And ListSize(*Object\Client()\RX_Frame()) = 0
+          ; #### Forward event to application, but only if there was a connect event for this client before
           If *Object\Client()\External_Reference
             *Callback(*Object, *Object\Client(), #Event_Disconnect)
           EndIf
+          ; #### Free all RX_Frames()
+          ForEach *Object\Client()\RX_Frame()
+            FreeMemory(*Object\Client()\RX_Frame()\Data)
+          Next
           CloseNetworkConnection(*Object\Client()\ID)
           DeleteElement(*Object\Client())
           UnlockMutex(*Object\Mutex)
@@ -814,7 +834,7 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
-  Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null)
+  Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max)
     Protected *Object.Object
     
     *Object = AllocateStructure(Object)
@@ -843,6 +863,7 @@ Module WebSocket_Server
       ProcedureReturn #Null
     EndIf
     
+    *Object\Frame_Payload_Max = Frame_Payload_Max
     *Object\Event_Thread_Callback = *Event_Thread_Callback
     
     ProcedureReturn *Object
@@ -861,8 +882,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.31 (Windows - x64)
-; CursorPosition = 48
-; FirstLine = 12
+; CursorPosition = 86
+; FirstLine = 70
 ; Folding = ---
 ; EnableUnicode
 ; EnableThread
