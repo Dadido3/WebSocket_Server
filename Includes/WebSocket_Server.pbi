@@ -44,6 +44,10 @@
 ; Version history:
 ; - V0.990 (05.02.2015)
 ;   - Everything done (Hopefully)
+; 
+; - V0.991 (09.02.2015)
+;   - Changed endian conversion from bitshifting to direct memory access to make the include working with x86.
+
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -131,6 +135,10 @@ Module WebSocket_Server
   EndEnumeration
   
   ; ##################################################### Structures ##################################################
+  
+  Structure Eight_Bytes
+    Byte.a[8]
+  EndStructure
   
   Structure HTTP_Header
     *Data
@@ -367,6 +375,7 @@ Module WebSocket_Server
     Protected Result.i
     Protected *Temp_Data
     Protected Mask.l, *Pointer_Mask.Long
+    Protected *Eight_Bytes.Eight_Bytes
     Protected i
     
     If *Client\Close
@@ -427,21 +436,23 @@ Module WebSocket_Server
           Case 126
             *Client\RX_Frame()\RxTx_Size + 2
             If *Client\RX_Frame()\RxTx_Pos = *Client\RX_Frame()\RxTx_Size
-              *Client\RX_Frame()\Payload_Size = *Client\RX_Frame()\Data\Length\Extended[0] << 8 +
-                                                *Client\RX_Frame()\Data\Length\Extended[1]
+              *Eight_Bytes = @*Client\RX_Frame()\Payload_Size
+              *Eight_Bytes\Byte[1] = *Client\RX_Frame()\Data\Length\Extended[0]
+              *Eight_Bytes\Byte[0] = *Client\RX_Frame()\Data\Length\Extended[1]
             EndIf
             
           Case 127
             *Client\RX_Frame()\RxTx_Size + 8
             If *Client\RX_Frame()\RxTx_Pos = *Client\RX_Frame()\RxTx_Size
-              *Client\RX_Frame()\Payload_Size = *Client\RX_Frame()\Data\Length\Extended[0] << 56 +
-                                                *Client\RX_Frame()\Data\Length\Extended[1] << 48 +
-                                                *Client\RX_Frame()\Data\Length\Extended[2] << 40 +
-                                                *Client\RX_Frame()\Data\Length\Extended[3] << 32 +
-                                                *Client\RX_Frame()\Data\Length\Extended[4] << 24 +
-                                                *Client\RX_Frame()\Data\Length\Extended[5] << 16 +
-                                                *Client\RX_Frame()\Data\Length\Extended[6] << 8  +
-                                                *Client\RX_Frame()\Data\Length\Extended[7]
+              *Eight_Bytes = @*Client\RX_Frame()\Payload_Size
+              *Eight_Bytes\Byte[7] = *Client\RX_Frame()\Data\Length\Extended[0]
+              *Eight_Bytes\Byte[6] = *Client\RX_Frame()\Data\Length\Extended[1]
+              *Eight_Bytes\Byte[5] = *Client\RX_Frame()\Data\Length\Extended[2]
+              *Eight_Bytes\Byte[4] = *Client\RX_Frame()\Data\Length\Extended[3]
+              *Eight_Bytes\Byte[3] = *Client\RX_Frame()\Data\Length\Extended[4]
+              *Eight_Bytes\Byte[2] = *Client\RX_Frame()\Data\Length\Extended[5]
+              *Eight_Bytes\Byte[1] = *Client\RX_Frame()\Data\Length\Extended[6]
+              *Eight_Bytes\Byte[0] = *Client\RX_Frame()\Data\Length\Extended[7]
             EndIf
             
         EndSelect
@@ -612,6 +623,7 @@ Module WebSocket_Server
   
   Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.i)
     Protected *Pointer.Ascii
+    Protected *Eight_Bytes.Eight_Bytes
     
     If Not *Object
       ProcedureReturn #False
@@ -651,20 +663,22 @@ Module WebSocket_Server
           *Pointer\a = Payload_Size       : *Pointer + 1
           *Client\TX_Frame()\RxTx_Size + 1
         Case 126 To 65536
-          *Pointer\a = 126                : *Pointer + 1
-          *Pointer\a = Payload_Size >> 8  : *Pointer + 1
-          *Pointer\a = Payload_Size       : *Pointer + 1
+          *Eight_Bytes = @Payload_Size
+          *Pointer\a = 126                  : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[1] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[0] : *Pointer + 1
           *Client\TX_Frame()\RxTx_Size + 3
         Default
-          *Pointer\a = 127                : *Pointer + 1
-          *Pointer\a = Payload_Size >> 56 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 48 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 40 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 32 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 24 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 16 : *Pointer + 1
-          *Pointer\a = Payload_Size >> 8  : *Pointer + 1
-          *Pointer\a = Payload_Size       : *Pointer + 1
+          *Eight_Bytes = @Payload_Size
+          *Pointer\a = 127                  : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[7] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[6] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[5] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[4] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[3] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[2] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[1] : *Pointer + 1
+          *Pointer\a = *Eight_Bytes\Byte[0] : *Pointer + 1
           *Client\TX_Frame()\RxTx_Size + 9
       EndSelect
       
@@ -847,7 +861,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.31 (Windows - x64)
-; CursorPosition = 45
+; CursorPosition = 48
+; FirstLine = 12
 ; Folding = ---
 ; EnableUnicode
 ; EnableThread
