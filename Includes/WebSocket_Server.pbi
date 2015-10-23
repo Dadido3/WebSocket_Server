@@ -49,8 +49,12 @@
 ;   - Changed endian conversion from bitshifting to direct memory access to make the include working with x86.
 ; 
 ; - V0.992 (09.02.2015)
-;   - Added #Frame_Payload_Max do prevent clients to be make the server allocate alot of memory.
+;   - Added #Frame_Payload_Max to prevent clients to make the server allocate a lot of memory.
 ;   - Some other small bugfixes.
+; 
+; - V0.993 (24.10.2015)
+;   - Made it compatible with PB 5.40 LTS (Mainly SHA-1)
+;   - Bugfix with pokes
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -63,6 +67,8 @@ CompilerEndIf
 DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
+  
+  #Version = 0993
   
   Enumeration
     #Event_None
@@ -125,6 +131,7 @@ Module WebSocket_Server
   EnableExplicit
   
   InitNetwork()
+  UseSHA1Fingerprint()
   
   ; ##################################################### Constants ###################################################
   
@@ -230,22 +237,18 @@ Module WebSocket_Server
   EndProcedure
   
   Procedure.s Generate_Key(Client_Key.s)
-    Protected *Temp_Data, *Temp_Data_2, *Temp_Data_3
-    Protected Temp_String.s, Temp_String_ByteLength.i
+    Protected *Temp_Data_2, *Temp_Data_3
+    Protected Temp_String.s
     Protected Temp_SHA1.s
     Protected i
     Protected Result.s
     
     Temp_String.s = Client_Key + #GUID
     
-    ; #### Convert to ASCII
-    Temp_String_ByteLength = StringByteLength(Temp_String, #PB_Ascii)
-    *Temp_Data = AllocateMemory(Temp_String_ByteLength)
-    PokeS(*Temp_Data, Temp_String, -1, #PB_Ascii | #PB_String_NoZero)
-    
     ; #### Generate the SHA1
     *Temp_Data_2 = AllocateMemory(20)
-    Temp_SHA1.s = SHA1Fingerprint(*Temp_Data, Temp_String_ByteLength)
+    Temp_SHA1.s = StringFingerprint(Temp_String, #PB_Cipher_SHA1, 0, #PB_Ascii)
+    Debug Temp_SHA1
     For i = 0 To 19
       PokeA(*Temp_Data_2+i, Val("$"+Mid(Temp_SHA1, 1+i*2, 2)))
     Next
@@ -256,7 +259,6 @@ Module WebSocket_Server
     
     Result = PeekS(*Temp_Data_3, -1, #PB_Ascii)
     
-    FreeMemory(*Temp_Data)
     FreeMemory(*Temp_Data_2)
     FreeMemory(*Temp_Data_3)
     
@@ -722,7 +724,7 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
-    PokeS(*Temp, Text, Temp_Size, #PB_UTF8 | #PB_String_NoZero)
+    PokeS(*Temp, Text, -1, #PB_UTF8 | #PB_String_NoZero)
     
     Result = Frame_Send(*Object, *Client, #True, 0, #Opcode_Text, *Temp, Temp_Size)
     
@@ -881,9 +883,9 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.31 (Windows - x64)
-; CursorPosition = 86
-; FirstLine = 70
+; IDE Options = PureBasic 5.40 LTS (Windows - x64)
+; CursorPosition = 239
+; FirstLine = 54
 ; Folding = ---
 ; EnableUnicode
 ; EnableThread

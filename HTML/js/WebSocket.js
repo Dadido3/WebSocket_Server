@@ -42,6 +42,8 @@ function onMessage(evt) {
 	
 	switch(arr_from_json.Type){
 		case "Message":
+		case "Info":
+		case "Error":
 			if (arr_from_json.Author === document.getElementById('Chat_Author').value)
 				arr_from_json.Type = "Own_Message";
 			chat_bubble_add(arr_from_json.Type, arr_from_json.Author, arr_from_json.Message, arr_from_json.Timestamp * 1000);
