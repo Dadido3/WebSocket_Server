@@ -99,6 +99,8 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
                 ExtractJSONStructure(JSONValue(JSON_ID), Chat_Message, Chat_Message)
                 PrintN(Chat_Message\Author + ": " + Chat_Message\Message)
                 
+                Debug PeekS(*Event_Frame\Payload, *Event_Frame\Payload_Size, #PB_UTF8)
+                
                 JSON2_ID = CreateJSON(#PB_Any)
                 If JSON2_ID
                   
@@ -170,10 +172,9 @@ Repeat
   Next
   UnlockMutex(Mutex)
 ForEver
-; IDE Options = PureBasic 5.31 (Windows - x64)
-; CursorPosition = 107
-; FirstLine = 84
+; IDE Options = PureBasic 5.60 beta 6 (Windows - x64)
+; CursorPosition = 27
 ; Folding = -
-; EnableUnicode
 ; EnableThread
 ; EnableXP
+; EnableUnicode

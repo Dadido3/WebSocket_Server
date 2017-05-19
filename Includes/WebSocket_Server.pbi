@@ -2,7 +2,7 @@
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015 David Vogel
+;     Copyright (c) 2015-2017 David Vogel
 ;     
 ;     Permission is hereby granted, free of charge, To any person obtaining a copy
 ;     of this software And associated documentation files (the "Software"), To deal
@@ -55,6 +55,9 @@
 ; - V0.993 (24.10.2015)
 ;   - Made it compatible with PB 5.40 LTS (Mainly SHA-1)
 ;   - Bugfix with pokes
+; 
+; - V0.994 (20.05.2017)
+;   - Made it compatible with PB 5.60
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -68,7 +71,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0993
+  #Version = 0994
   
   Enumeration
     #Event_None
@@ -255,7 +258,11 @@ Module WebSocket_Server
     
     ; #### Encode the SHA1 as Base64
     *Temp_Data_3 = AllocateMemory(30)
-    Base64Encoder(*Temp_Data_2, 20, *Temp_Data_3, 30)
+    CompilerIf #PB_Compiler_Version < 560
+      Base64Encoder(*Temp_Data_2, 20, *Temp_Data_3, 30)
+    CompilerElse
+      Base64EncoderBuffer(*Temp_Data_2, 20, *Temp_Data_3, 30)
+    CompilerEndIf
     
     Result = PeekS(*Temp_Data_3, -1, #PB_Ascii)
     
@@ -883,11 +890,11 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.40 LTS (Windows - x64)
-; CursorPosition = 239
-; FirstLine = 54
+; IDE Options = PureBasic 5.60 beta 6 (Windows - x64)
+; CursorPosition = 4
+; FirstLine = 12
 ; Folding = ---
-; EnableUnicode
 ; EnableThread
 ; EnableXP
 ; EnablePurifier = 1,1,1,1
+; EnableUnicode
