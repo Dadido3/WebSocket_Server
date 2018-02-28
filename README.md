@@ -26,10 +26,17 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
     Case WebSocket_Server::#Event_Frame
       PrintN(" #### Frame received from " + *Client)
       
+      ; #### OpCode is the type of frame you receive.
+      ; #### It's either Text, Binary-Data, Ping-Frames or other stuff.
+      ; #### You only need to care about text and binary frames.
       Select *Event_Frame\Opcode
-        ; #### OpCode is the type of frame you receive.
-        ; #### Either Text, Binary-Data, Ping-Frames or other stuff.
-        ; #### You only need to care about text and binary frames.
+        Case WebSocket_Server::#Opcode_Ping
+          PrintN("      Client sent a ping frame")
+        Case WebSocket_Server::#Opcode_Text
+          PrintN("      Text received: " + PeekS(*Event_Frame\Payload, *Event_Frame\Payload_Size, #PB_UTF8|#PB_ByteLength))
+        Case WebSocket_Server::#Opcode_Binary
+          PrintN("      Binary data received")
+          ; *Event_Frame\Payload contains the data, *Event_Frame\Payload_Size is the size of the data in bytes
       EndSelect
       
   EndSelect
@@ -38,10 +45,10 @@ EndProcedure
 Your main loop:
 ```
 Repeat
-    ; Other stuff
-    While WebSocket_Server::Event_Callback(*Server, @WebSocket_Event())
-    Wend
-    ; Other stuff
+  ; Other stuff
+  While WebSocket_Server::Event_Callback(*Server, @WebSocket_Event())
+  Wend
+  ; Other stuff
 ForEver
 ```
 
@@ -82,10 +89,17 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
     Case WebSocket_Server::#Event_Frame
       PrintN(" #### Frame received from " + *Client)
       
+      ; #### OpCode is the type of frame you receive.
+      ; #### It's either Text, Binary-Data, Ping-Frames or other stuff.
+      ; #### You only need to care about text and binary frames.
       Select *Event_Frame\Opcode
-        ; #### OpCode is the type of frame you receive.
-        ; #### Either Text, Binary-Data, Ping-Frames or other stuff.
-        ; #### You only need to care about text and binary frames.
+        Case WebSocket_Server::#Opcode_Ping
+          PrintN("      Client sent a ping frame")
+        Case WebSocket_Server::#Opcode_Text
+          PrintN("      Text received: " + PeekS(*Event_Frame\Payload, *Event_Frame\Payload_Size, #PB_UTF8|#PB_ByteLength))
+        Case WebSocket_Server::#Opcode_Binary
+          PrintN("      Binary data received")
+          ; *Event_Frame\Payload contains the data, *Event_Frame\Payload_Size is the size of the data in bytes
       EndSelect
       
   EndSelect
