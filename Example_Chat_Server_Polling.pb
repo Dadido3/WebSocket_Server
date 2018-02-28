@@ -24,8 +24,6 @@ EndStructure
 
 Global NewList Client.Client()
 
-Global Mutex.i = CreateMutex()      ; Mutex to prevent simultaneous access to the Client() list
-
 XIncludeFile "Includes/WebSocket_Server.pbi"
 
 Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server::Event_Frame)
@@ -35,8 +33,6 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
   Protected JSON_ID.i
   Protected JSON2_ID.i
   Protected JSON_String.s
-  
-  LockMutex(Mutex)
   
   Select Event
     Case WebSocket_Server::#Event_Connect
@@ -160,28 +156,21 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
       EndSelect
       
   EndSelect
-  
-  UnlockMutex(Mutex)
 EndProcedure
 
-*Server = WebSocket_Server::Create(8090, @WebSocket_Event())
+*Server = WebSocket_Server::Create(8090)
 
 OpenConsole()
 
 Repeat
-  Text.s = Input()
+  While WebSocket_Server::Event_Callback(*Server, @WebSocket_Event())
+  Wend
   
-  LockMutex(Mutex)
-  ForEach Client()
-    WebSocket_Server::Frame_Text_Send(*Server, Client()\WebSocket_Client, Text)
-  Next
-  UnlockMutex(Mutex)
+  Delay(10)
 ForEver
 ; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 106
-; FirstLine = 82
+; CursorPosition = 168
+; FirstLine = 116
 ; Folding = -
 ; EnableThread
 ; EnableXP
-; EnablePurifier = 1,1,1,1
-; EnableUnicode

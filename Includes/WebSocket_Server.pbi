@@ -2,7 +2,7 @@
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015-2017 David Vogel
+;     Copyright (c) 2015-2018 David Vogel
 ;     
 ;     Permission is hereby granted, free of charge, To any person obtaining a copy
 ;     of this software And associated documentation files (the "Software"), To deal
@@ -34,8 +34,9 @@
 ; Working OSes:
 ; - Windows
 ;   - Tested: 7 x64
+;   - Tested: 10 x64
 ; - Linux
-;   - Not tested yet
+;   - Tested: Ubuntu 17.10 x64
 ; - MacOS
 ;   - Not tested yet
 ; 
@@ -58,6 +59,10 @@
 ; 
 ; - V0.994 (20.05.2017)
 ;   - Made it compatible with PB 5.60
+; 
+; - V0.995 (28.02.2018)
+;   - Fixed possible deadlock
+;   - Fixed unnecessary disconnect event
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -71,7 +76,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0994
+  #Version = 0995
   
   Enumeration
     #Event_None
@@ -251,7 +256,7 @@ Module WebSocket_Server
     ; #### Generate the SHA1
     *Temp_Data_2 = AllocateMemory(20)
     Temp_SHA1.s = StringFingerprint(Temp_String, #PB_Cipher_SHA1, 0, #PB_Ascii)
-    Debug Temp_SHA1
+    ;Debug Temp_SHA1
     For i = 0 To 19
       PokeA(*Temp_Data_2+i, Val("$"+Mid(Temp_SHA1, 1+i*2, 2)))
     Next
@@ -434,7 +439,7 @@ Module WebSocket_Server
         EndIf
       EndIf
       
-      ; #### Calculate how many bytes needs to be received
+      ; #### Calculate how many bytes need to be received
       Receive_Size = *Client\RX_Frame()\RxTx_Size - *Client\RX_Frame()\RxTx_Pos
       
       ; #### Receive...
@@ -613,7 +618,8 @@ Module WebSocket_Server
       
       ; #### Event Callback (Threaded)
       If *Object\Event_Thread_Callback
-        Event_Callback(*Object, *Object\Event_Thread_Callback)
+        While Event_Callback(*Object, *Object\Event_Thread_Callback)
+        Wend
       EndIf
       
       ; #### Send Data
@@ -742,6 +748,7 @@ Module WebSocket_Server
   
   Procedure Event_Callback(*Object.Object, *Callback.Event_Callback)
     Protected Event_Frame.Event_Frame
+    Protected *Client.Client
     
     If Not *Object
       ProcedureReturn #False
@@ -757,25 +764,32 @@ Module WebSocket_Server
     
     ForEach *Object\Client()
       
-      Select *Object\Client()\Event
+      *Client = *Object\Client()
+      
+      Select *Client\Event
         Case #Event_Connect
           ; #### Event: Client connected and handshake was successful
-          *Object\Client()\Event = #Event_None
-          *Object\Client()\External_Reference = #True
-          *Callback(*Object, *Object\Client(), #Event_Connect)
+          *Client\Event = #Event_None
+          *Client\External_Reference = #True
           UnlockMutex(*Object\Mutex)
+          *Callback(*Object, *Client, #Event_Connect)
           ProcedureReturn #True
           
         Case #Event_Disconnect
           ; #### Event: Client disconnected
           ; #### Only return this event if there are no incoming frames left.
-          If ListSize(*Object\Client()\RX_Frame()) = 0
-            *Object\Client()\Event = #Event_None
-            *Callback(*Object, *Object\Client(), #Event_Disconnect)
+          If ListSize(*Client\RX_Frame()) = 0
+            *Client\Event = #Event_None
+            If *Client\External_Reference
+              UnlockMutex(*Object\Mutex)
+              *Callback(*Object, *Client, #Event_Disconnect)
+              LockMutex(*Object\Mutex)
+            EndIf
             ; #### Free all TX_Frames()
-            ForEach *Object\Client()\TX_Frame()
-              FreeMemory(*Object\Client()\TX_Frame()\Data)
+            ForEach *Client\TX_Frame()
+              FreeMemory(*Client\TX_Frame()\Data)
             Next
+            ChangeCurrentElement(*Object\Client(), *Client) ; It may possible that the current element got changed while the mutex was unlocked
             DeleteElement(*Object\Client())
             UnlockMutex(*Object\Mutex)
             ProcedureReturn #True
@@ -784,18 +798,21 @@ Module WebSocket_Server
       EndSelect
       
       ; #### Event: Close connection (Initiated by the server-side)
-      If *Object\Client()\Close
+      If *Client\Close
         ; #### Only close the connection if there are no frames left.
-        If ListSize(*Object\Client()\TX_Frame()) = 0; And ListSize(*Object\Client()\RX_Frame()) = 0
+        If ListSize(*Client\TX_Frame()) = 0; And ListSize(*Client\RX_Frame()) = 0
           ; #### Forward event to application, but only if there was a connect event for this client before
-          If *Object\Client()\External_Reference
-            *Callback(*Object, *Object\Client(), #Event_Disconnect)
+          If *Client\External_Reference
+            UnlockMutex(*Object\Mutex)
+            *Callback(*Object, *Client, #Event_Disconnect)
+            LockMutex(*Object\Mutex)
           EndIf
           ; #### Free all RX_Frames()
-          ForEach *Object\Client()\RX_Frame()
-            FreeMemory(*Object\Client()\RX_Frame()\Data)
+          ForEach *Client\RX_Frame()
+            FreeMemory(*Client\RX_Frame()\Data)
           Next
-          CloseNetworkConnection(*Object\Client()\ID)
+          CloseNetworkConnection(*Client\ID)
+          ChangeCurrentElement(*Object\Client(), *Client) ; It may possible that the current element got changed while the mutex was unlocked
           DeleteElement(*Object\Client())
           UnlockMutex(*Object\Mutex)
           ProcedureReturn #True
@@ -803,18 +820,20 @@ Module WebSocket_Server
       EndIf
       
       ; #### Event: Frame available
-      If FirstElement(*Object\Client()\RX_Frame())
-        If *Object\Client()\RX_Frame()\Done
-          Event_Frame\Fin = *Object\Client()\RX_Frame()\Data\Byte[0] >> 7 & %00000001
-          Event_Frame\RSV = *Object\Client()\RX_Frame()\Data\Byte[0] >> 4 & %00000111
-          Event_Frame\Opcode = *Object\Client()\RX_Frame()\Data\Byte[0] & %00001111
-          Event_Frame\Payload = *Object\Client()\RX_Frame()\Data + *Object\Client()\RX_Frame()\Payload_Pos
-          Event_Frame\Payload_Size = *Object\Client()\RX_Frame()\Payload_Size
+      If FirstElement(*Client\RX_Frame())
+        If *Client\RX_Frame()\Done
+          Event_Frame\Fin = *Client\RX_Frame()\Data\Byte[0] >> 7 & %00000001
+          Event_Frame\RSV = *Client\RX_Frame()\Data\Byte[0] >> 4 & %00000111
+          Event_Frame\Opcode = *Client\RX_Frame()\Data\Byte[0] & %00001111
+          Event_Frame\Payload = *Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos
+          Event_Frame\Payload_Size = *Client\RX_Frame()\Payload_Size
           
-          *Callback(*Object, *Object\Client(), #Event_Frame, Event_Frame)
+          UnlockMutex(*Object\Mutex)
+          *Callback(*Object, *Client, #Event_Frame, Event_Frame)
+          LockMutex(*Object\Mutex)
           
-          FreeMemory(*Object\Client()\RX_Frame()\Data)
-          DeleteElement(*Object\Client()\RX_Frame())
+          FreeMemory(*Client\RX_Frame()\Data)
+          DeleteElement(*Client\RX_Frame())
           
           UnlockMutex(*Object\Mutex)
           ProcedureReturn #True
@@ -890,9 +909,8 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.60 beta 6 (Windows - x64)
-; CursorPosition = 4
-; FirstLine = 12
+; IDE Options = PureBasic 5.61 (Windows - x64)
+; CursorPosition = 38
 ; Folding = ---
 ; EnableThread
 ; EnableXP
