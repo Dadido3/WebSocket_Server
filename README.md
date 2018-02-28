@@ -57,6 +57,11 @@ Send a text-frame:
 WebSocket_Server::Frame_Text_Send(*Server, *Client, "Hello Client!")
 ```
 
+Send a binary-frame:
+```
+WebSocket_Server::Frame_Send(*Server, *Client, #True, 0, WebSocket_Server::#Opcode_Binary, *Data, Data_Size)
+```
+
 Close and free a WebSocket-Server:
 ```
 Free(*Server)
@@ -69,6 +74,9 @@ Instead the callback will be called as soon as any event occurs.
 As the callback is called from a different thread, you have to make sure everything in your callback function is threadsafe with the rest of your program.
 This mode has better performance, less latency and uses less ressources.
 But it may cause bugs like deadlocks if you use it wrong.
+
+To make it clear, you only have to make sure that all the >your< ressources/lists/variables/... used in the event handler function are threadsafe with the rest of your program.
+But You can send websocket message from any thread without using mutexes, as the functions of this include are already threadsafe.
 
 Open a WebSocket-Server:
 ```
@@ -109,6 +117,11 @@ EndProcedure
 Send a text-frame:
 ```
 WebSocket_Server::Frame_Text_Send(*Server, *Client, "Hello Client!")
+```
+
+Send a binary-frame:
+```
+WebSocket_Server::Frame_Send(*Server, *Client, #True, 0, WebSocket_Server::#Opcode_Binary, *Data, Data_Size)
 ```
 
 Close and free a WebSocket-Server:
