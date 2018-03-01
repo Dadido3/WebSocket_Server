@@ -63,6 +63,9 @@
 ; - V0.995 (28.02.2018)
 ;   - Fixed possible deadlock
 ;   - Fixed unnecessary disconnect event
+; 
+; - V0.996 (01.03.2018)
+;   - Fixed error on too quick disconnect
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -76,7 +79,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0995
+  #Version = 0996
   
   Enumeration
     #Event_None
@@ -811,7 +814,9 @@ Module WebSocket_Server
           ForEach *Client\RX_Frame()
             FreeMemory(*Client\RX_Frame()\Data)
           Next
-          CloseNetworkConnection(*Client\ID)
+          If *Client\ID
+            CloseNetworkConnection(*Client\ID)
+          EndIf
           ChangeCurrentElement(*Object\Client(), *Client) ; It may possible that the current element got changed while the mutex was unlocked
           DeleteElement(*Object\Client())
           UnlockMutex(*Object\Mutex)
@@ -910,7 +915,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 38
+; CursorPosition = 67
+; FirstLine = 33
 ; Folding = ---
 ; EnableThread
 ; EnableXP
