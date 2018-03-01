@@ -93,7 +93,7 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
         Case WebSocket_Server::#Opcode_Ping
           PrintN(" #### Ping from *Client " + *Client)
         Case WebSocket_Server::#Opcode_Text
-          JSON_ID = CatchJSON(#PB_Any, *Event_Frame\Payload, *Event_Frame\Payload_Size)
+          JSON_ID = ParseJSON(#PB_Any, PeekS(*Event_Frame\Payload, *Event_Frame\Payload_Size, #PB_UTF8|#PB_ByteLength))
           If JSON_ID
             
             Select GetJSONString(GetJSONMember(JSONValue(JSON_ID), "Type"))
@@ -178,8 +178,8 @@ Repeat
   UnlockMutex(Mutex)
 ForEver
 ; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 106
-; FirstLine = 82
+; CursorPosition = 95
+; FirstLine = 58
 ; Folding = -
 ; EnableThread
 ; EnableXP
