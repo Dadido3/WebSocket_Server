@@ -2,7 +2,7 @@
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015-2018 David Vogel
+;     Copyright (c) 2015-2019 David Vogel
 ;     
 ;     Permission is hereby granted, free of charge, To any person obtaining a copy
 ;     of this software And associated documentation files (the "Software"), To deal
@@ -985,8 +985,7 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.71 LTS (Windows - x64)
-; CursorPosition = 75
-; FirstLine = 60
+; CursorPosition = 4
 ; Folding = ---
 ; EnableThread
 ; EnableXP
