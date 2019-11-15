@@ -71,6 +71,9 @@
 ;   - Use extra thread for callbacks
 ;   - Optimized the network event handling
 ;   - Fixed some leftovers when freeing the server
+; 
+; - V0.998 (15.11.2019)
+;   - Fix missing or wrong rx frames on slower connections
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -84,7 +87,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0997
+  #Version = 0998
   
   Enumeration
     #Event_None
@@ -663,6 +666,7 @@ Module WebSocket_Server
     
     CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
     
+    ; No need to care about the event thread, as it is shut down before cleanup happens here
     ForEach *Object\Client()
       ; #### Free all RX_Frames()
       ForEach *Object\Client()\RX_Frame()
@@ -864,9 +868,11 @@ Module WebSocket_Server
         Event_Frame\Payload = *Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos
         Event_Frame\Payload_Size = *Client\RX_Frame()\Payload_Size
         
+        PushListPosition(*Client\RX_Frame())
         UnlockMutex(*Object\Mutex)
         *Callback(*Object, *Client, #Event_Frame, Event_Frame)
         LockMutex(*Object\Mutex)
+        PopListPosition(*Client\RX_Frame()) ; Restore frame. It's guaranteed that the list element still exists here
         
         FreeMemory(*Client\RX_Frame()\Data)
         DeleteElement(*Client\RX_Frame())
@@ -978,9 +984,9 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 223
-; FirstLine = 198
+; IDE Options = PureBasic 5.71 LTS (Windows - x64)
+; CursorPosition = 75
+; FirstLine = 60
 ; Folding = ---
 ; EnableThread
 ; EnableXP
