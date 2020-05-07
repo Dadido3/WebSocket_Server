@@ -1,4 +1,4 @@
-﻿; ##################################################### License / Copyright #########################################
+; ##################################################### License / Copyright #########################################
 ; 
 ;     The MIT License (MIT)
 ;     
@@ -852,7 +852,7 @@ Module WebSocket_Server
           FreeMemory(*Client\RX_Frame()\Data)
         Next
         If *Client\ID
-          CloseNetworkConnection(*Client\ID)
+          ;CloseNetworkConnection(*Client\ID)
         EndIf
         ChangeCurrentElement(*Object\Client(), *Client) ; It may be possible that the current element got changed while the mutex was unlocked
         DeleteElement(*Object\Client())
