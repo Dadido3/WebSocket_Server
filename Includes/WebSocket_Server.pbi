@@ -1,25 +1,25 @@
-; ##################################################### License / Copyright #########################################
+﻿; ##################################################### License / Copyright #########################################
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015-2019 David Vogel
+;     Copyright (c) 2015-2020 David Vogel
 ;     
-;     Permission is hereby granted, free of charge, To any person obtaining a copy
-;     of this software And associated documentation files (the "Software"), To deal
+;     Permission is hereby granted, free of charge, to any person obtaining a copy
+;     of this software and associated documentation files (the "Software"), to deal
 ;     in the Software without restriction, including without limitation the rights
-;     To use, copy, modify, merge, publish, distribute, sublicense, And/Or sell
-;     copies of the Software, And To permit persons To whom the Software is
-;     furnished To do so, subject To the following conditions:
+;     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;     copies of the Software, and to permit persons to whom the Software is
+;     furnished to do so, subject to the following conditions:
 ;     
-;     The above copyright notice And this permission notice shall be included in all
-;     copies Or substantial portions of the Software.
+;     The above copyright notice and this permission notice shall be included in all
+;     copies or substantial portions of the Software.
 ;     
-;     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS Or
-;     IMPLIED, INCLUDING BUT Not LIMITED To THE WARRANTIES OF MERCHANTABILITY,
-;     FITNESS For A PARTICULAR PURPOSE And NONINFRINGEMENT. IN NO EVENT SHALL THE
-;     AUTHORS Or COPYRIGHT HOLDERS BE LIABLE For ANY CLAIM, DAMAGES Or OTHER
-;     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT Or OTHERWISE, ARISING FROM,
-;     OUT OF Or IN CONNECTION With THE SOFTWARE Or THE USE Or OTHER DEALINGS IN THE
+;     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 ;     SOFTWARE.
 ; 
 ; #################################################### Documentation ################################################
@@ -328,7 +328,6 @@ Module WebSocket_Server
       ElseIf Result = 0
         Break
       Else
-        Debug "WebSocket_Server Error: ReceiveNetworkData() returns " + Str(Result)
         ProcedureReturn #False
       EndIf
       

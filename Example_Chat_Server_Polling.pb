@@ -168,9 +168,9 @@ Repeat
   
   Delay(10)
 ForEver
-; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 161
-; FirstLine = 96
+; IDE Options = PureBasic 5.72 (Windows - x64)
+; CursorPosition = 188
+; FirstLine = 140
 ; Folding = -
 ; EnableThread
 ; EnableXP
