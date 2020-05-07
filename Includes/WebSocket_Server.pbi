@@ -74,6 +74,9 @@
 ; 
 ; - V0.998 (15.11.2019)
 ;   - Fix missing or wrong rx frames on slower connections
+; 
+; - V0.999 (07.05.2020)
+;   - Fix rare crash after calling CloseNetworkConnection from another thread.
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -87,7 +90,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0998
+  #Version = 0999
   
   Enumeration
     #Event_None
@@ -605,39 +608,36 @@ Module WebSocket_Server
       ; #### Network Events
       Counter = 0
       Repeat
+        LockMutex(*Object\Mutex)
         Select NetworkServerEvent(*Object\Server_ID)
           Case #PB_NetworkEvent_None
+            UnlockMutex(*Object\Mutex)
             Break
             
           Case #PB_NetworkEvent_Connect
-            LockMutex(*Object\Mutex)
             LastElement(*Object\Client())
             AddElement(*Object\Client())
             *Object\Client()\ID = EventClient()
-            UnlockMutex(*Object\Mutex)
             Counter + 1
             
           Case #PB_NetworkEvent_Disconnect
-            LockMutex(*Object\Mutex)
             If Client_Select(*Object, EventClient())
               *Object\Client()\ID = #Null ; #### Client will be deleted later. The application can still read all incoming frames.
               *Object\Client()\Event_Disconnect = #True
             EndIf
-            UnlockMutex(*Object\Mutex)
             Counter + 1
             
           Case #PB_NetworkEvent_Data
-            LockMutex(*Object\Mutex)
             If Client_Select(*Object, EventClient())
               Select *Object\Client()\Mode
                 Case #Mode_Handshake  : Thread_Receive_Handshake(*Object, *Object\Client())
                 Case #Mode_Frames     : Thread_Receive_Frame(*Object, *Object\Client())
               EndSelect
             EndIf
-            UnlockMutex(*Object\Mutex)
             Counter + 1
             
         EndSelect
+        UnlockMutex(*Object\Mutex)
       Until Counter > 10
       
       ; #### Busy when there was atleast one network event
@@ -852,7 +852,7 @@ Module WebSocket_Server
           FreeMemory(*Client\RX_Frame()\Data)
         Next
         If *Client\ID
-          ;CloseNetworkConnection(*Client\ID)
+          CloseNetworkConnection(*Client\ID)
         EndIf
         ChangeCurrentElement(*Object\Client(), *Client) ; It may be possible that the current element got changed while the mutex was unlocked
         DeleteElement(*Object\Client())
@@ -984,8 +984,9 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.71 LTS (Windows - x64)
-; CursorPosition = 4
+; IDE Options = PureBasic 5.72 (Windows - x64)
+; CursorPosition = 630
+; FirstLine = 621
 ; Folding = ---
 ; EnableThread
 ; EnableXP
