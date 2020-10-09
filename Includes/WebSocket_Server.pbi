@@ -77,6 +77,9 @@
 ; 
 ; - V0.999 (07.05.2020)
 ;   - Fix rare crash after calling CloseNetworkConnection from another thread.
+; 
+; - V1.000 (09.10.2020)
+;   - Fix issue with some HTTP header fields and values not being treated case-insensitive.
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -90,7 +93,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0999
+  #Version = 1000
   
   Enumeration
     #Event_None
@@ -341,21 +344,21 @@ Module WebSocket_Server
           
           For i = 2 To CountString(Temp_Text, #CRLF$)
             Temp_Line = StringField(Temp_Text, i, #CRLF$)
-            *Client\HTTP_Header\Field(StringField(Temp_Line, 1, ":")) = Trim(StringField(Temp_Line, 2, ":"))
+            *Client\HTTP_Header\Field(LCase(StringField(Temp_Line, 1, ":"))) = Trim(StringField(Temp_Line, 2, ":"))
           Next
           
           ; #### Check if the request is correct
           ;TODO: Check if this mess works with most clients/browsers!
           If StringField(*Client\HTTP_Header\Request, 1, " ") = "GET"
-            If *Client\HTTP_Header\Field("Upgrade") = "websocket"
-              If FindString(*Client\HTTP_Header\Field("Connection"), "Upgrade")
-                If Val(*Client\HTTP_Header\Field("Sec-WebSocket-Version")) = 13 And FindMapElement(*Client\HTTP_Header\Field(), "Sec-WebSocket-Key")
+            If LCase(*Client\HTTP_Header\Field("upgrade")) = "websocket"
+              If FindString(LCase(*Client\HTTP_Header\Field("connection")), "upgrade")
+                If Val(*Client\HTTP_Header\Field("sec-websocket-version")) = 13 And FindMapElement(*Client\HTTP_Header\Field(), "sec-websocket-key")
                   *Client\Mode = #Mode_Frames
                   *Client\Event_Connect = #True
                   Response = "HTTP/1.1 101 Switching Protocols" + #CRLF$ +
                              "Upgrade: websocket" + #CRLF$ +
                              "Connection: Upgrade" + #CRLF$ +
-                             "Sec-WebSocket-Accept: " + Generate_Key(*Client\HTTP_Header\Field("Sec-WebSocket-Key")) + #CRLF$ +
+                             "Sec-WebSocket-Accept: " + Generate_Key(*Client\HTTP_Header\Field("sec-websocket-key")) + #CRLF$ +
                              #CRLF$
                 Else
                   *Client\Event_Disconnect_Manually = #True
@@ -984,8 +987,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 630
-; FirstLine = 621
+; CursorPosition = 95
+; FirstLine = 63
 ; Folding = ---
 ; EnableThread
 ; EnableXP
