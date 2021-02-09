@@ -81,16 +81,23 @@
 ; - V1.000 (09.10.2020)
 ;   - Fix issue with some HTTP header fields and values not being treated case-insensitive.
 ; 
-; - V1.001 (09.02.2021)
+; - V1.002 (09.02.2021)
 ;   - Fix typos and misspelled words
-;   - Delete any half received RX_Frame when Event_Disconnect_Manually is set
 ;   - Remove Event_Disconnect field from client
 ;   - Don't break loop in Thread_Receive_Frame() after every packet
 ;   - Remove some commented code
 ;   - Add mutexless variant of Frame_Send() for internal use
 ;   - Fix a race condition that may happen when using Client_Disconnect()
+;   - Fix a memory leak in the HTTP header receiver
 ;   - Get rid of pushing and popping RX_Frame
 ;   - Set Event_Disconnect_Manually flag inside of Frame_Send() and Frame_Send_Mutexless()
+;   - Remove the Done field from Frames
+;   - Add *New_RX_FRAME to client
+;   - Simplify how packets are received
+;   - Check result of all AllocateMemory and AllocateStructure calls
+;   - Null any freed memory or structure pointer
+;   - Prevent client to receive HTTP header if there is a forced disconnect
+;   - Limit HTTP header allocation size
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -104,7 +111,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1001
+  #Version = 1002
   
   Enumeration
     #Event_None
@@ -127,14 +134,14 @@ DeclareModule WebSocket_Server
   #RSV2 = %00000010
   #RSV3 = %00000001
   
-  #Frame_Payload_Max = 10000000  ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected
+  #Frame_Payload_Max = 10000000  ; Default max. size of an incoming frame's payload. If the payload exceeds this value, the client will be disconnected.
   
   ; ##################################################### Public Structures ###########################################
   
   Structure Event_Frame
-    Fin.a                 ; #True if this is the final frame of a series of frames
-    RSV.a                 ; Extension bits: RSV1, RSV2, RSV3
-    Opcode.a              ; Opcode
+    Fin.a                 ; #True if this is the final frame of a series of frames.
+    RSV.a                 ; Extension bits: RSV1, RSV2, RSV3.
+    Opcode.a              ; Opcode.
     
     *Payload
     Payload_Size.i
@@ -149,14 +156,14 @@ DeclareModule WebSocket_Server
   ; ##################################################### Public Procedures (Declares) ################################
   
   Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
-  Declare   Free(*Object)                                                                   ; Closes the WebSocket server
+  Declare   Free(*Object)                                                                   ; Closes the WebSocket server.
   
-  Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       ; Sends a text-frame
-  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)  ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary
+  Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       ; Sends a text-frame.
+  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)  ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary.
    
   Declare   Event_Callback(*Object, *Callback.Event_Callback)                               ; Checks for events, and calls the *Callback function if there are any.
   
-  Declare   Client_Disconnect(*Object, *Client)                                             ; Disconnects the specified *Client
+  Declare   Client_Disconnect(*Object, *Client)                                             ; Disconnects the specified *Client.
   
 EndDeclareModule
 
@@ -174,6 +181,7 @@ Module WebSocket_Server
   #Frame_Data_Size_Min = 2048
   
   #HTTP_Header_Data_Size_Step = 2048
+  #HTTP_Header_Data_Size_Max = 4096
   
   #GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
   
@@ -213,13 +221,11 @@ Module WebSocket_Server
   Structure Frame
     *Data.Frame_Header
     
-    RxTx_Pos.i              ; Current position while receiving or sending the frame
-    RxTx_Size.i             ; Size of the frame (Header + Payload)
+    RxTx_Pos.i              ; Current position while receiving or sending the frame.
+    RxTx_Size.i             ; Size of the frame (Header + Payload).
     
     Payload_Pos.i
     Payload_Size.q          ; Quad, because a frame can be 2^64B large.
-    
-    Done.l                  ; #True --> All data sent or received
   EndStructure
   
   Structure Client
@@ -227,8 +233,10 @@ Module WebSocket_Server
     
     HTTP_Header.HTTP_Header
     
-    List RX_Frame.Frame()   ; Incoming frames
-    List TX_Frame.Frame()   ; Outgoing frames
+   	*New_RX_FRAME.Frame     ; A frame that is currently being received.
+    
+    List RX_Frame.Frame()   ; List of fully received incoming frames (They need to be passed to the user of this library).
+    List TX_Frame.Frame()   ; List of outgoing frames. First one is currently being sent.
     
     Mode.i
     
@@ -241,22 +249,22 @@ Module WebSocket_Server
   Structure Object
     Server_ID.i
     
-    Network_Thread_ID.i     ; Thread handling in and outgoing data
+    Network_Thread_ID.i     ; Thread handling in and outgoing data.
     
-    Event_Thread_ID.i       ; Thread handling event callbacks and client deletions
-    Event_Semaphore.i       ; Semaphore for the event thread
+    Event_Thread_ID.i       ; Thread handling event callbacks and client deletions.
+    Event_Semaphore.i       ; Semaphore for the event thread.
     ; TODO: Create a queue, so the event thread doesn't have to iterate through all clients
     
     List Client.Client()
     
     *Event_Thread_Callback.Event_Callback
     
-    Frame_Payload_Max.q     ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected
+    Frame_Payload_Max.q     ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected.
     
     Mutex.i
     
-    Free_Event.i            ; Free the event thread and its semaphore
-    Free.i                  ; Free the main networking thread and all the resources
+    Free_Event.i            ; Free the event thread and its semaphore.
+    Free.i                  ; Free the main networking thread and all the resources.
   EndStructure
   
   ; ##################################################### Variables ###################################################
@@ -292,6 +300,9 @@ Module WebSocket_Server
     
     ; #### Generate the SHA1
     *Temp_Data_2 = AllocateMemory(20)
+    If Not *Temp_Data_2
+    	ProcedureReturn ""
+    EndIf
     Temp_SHA1.s = StringFingerprint(Temp_String, #PB_Cipher_SHA1, 0, #PB_Ascii)
     ;Debug Temp_SHA1
     For i = 0 To 19
@@ -300,6 +311,10 @@ Module WebSocket_Server
     
     ; #### Encode the SHA1 as Base64
     *Temp_Data_3 = AllocateMemory(30)
+    If Not *Temp_Data_3
+    	FreeMemory(*Temp_Data_2)
+    	ProcedureReturn ""
+    EndIf
     CompilerIf #PB_Compiler_Version < 560
       Base64Encoder(*Temp_Data_2, 20, *Temp_Data_3, 30)
     CompilerElse
@@ -323,17 +338,32 @@ Module WebSocket_Server
     Protected Response.s
     Protected i
     
+    If *Client\Event_Disconnect_Manually
+      ProcedureReturn #False
+    EndIf
+    
     Repeat
+    
+    	; #### Limit memory usage.
+    	If *Client\HTTP_Header\RX_Pos > #HTTP_Header_Data_Size_Max
+    		*Client\Event_Disconnect_Manually = #True
+        ProcedureReturn #False
+    	EndIf
       
       ; #### Manage memory
       If Not *Client\HTTP_Header\Data
-        *Client\HTTP_Header\Data = AllocateMemory(#HTTP_Header_Data_Size_Step)
+        *Client\HTTP_Header\Data = AllocateMemory(#HTTP_Header_Data_Size_Step) ; This will be purged when the header got fully parsed, when the client is deleted or when the server is released.
+        If Not *Client\HTTP_Header\Data
+        	*Client\Event_Disconnect_Manually = #True
+          ProcedureReturn #False
+        EndIf
       EndIf
       If MemorySize(*Client\HTTP_Header\Data) < *Client\HTTP_Header\RX_Pos + 1
         *Temp_Data = ReAllocateMemory(*Client\HTTP_Header\Data, (*Client\HTTP_Header\RX_Pos / #HTTP_Header_Data_Size_Step + 1) * #HTTP_Header_Data_Size_Step)
         If *Temp_Data
           *Client\HTTP_Header\Data = *Temp_Data
         Else
+        	*Client\Event_Disconnect_Manually = #True
           ProcedureReturn #False
         EndIf
       EndIf
@@ -345,6 +375,7 @@ Module WebSocket_Server
       ElseIf Result = 0
         Break
       Else
+        *Client\Event_Disconnect_Manually = #True
         ProcedureReturn #False
       EndIf
       
@@ -353,6 +384,7 @@ Module WebSocket_Server
         If PeekL(*Client\HTTP_Header\Data + *Client\HTTP_Header\RX_Pos - 4) = 168626701 ; ### CR LF CR LF
           
           Temp_Text = PeekS(*Client\HTTP_Header\Data, *Client\HTTP_Header\RX_Pos-2, #PB_Ascii)
+          FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
           
           *Client\HTTP_Header\Request = StringField(Temp_Text, 1, #CRLF$)
           
@@ -413,12 +445,17 @@ Module WebSocket_Server
             
             *Client\TX_Frame()\RxTx_Size = StringByteLength(Response, #PB_Ascii)
             *Client\TX_Frame()\Data = AllocateMemory(*Client\TX_Frame()\RxTx_Size)
+            If Not *Client\TX_Frame()\Data
+            	*Client\Event_Disconnect_Manually = #True
+            	DeleteElement(*Client\TX_Frame())
+            	ProcedureReturn #False
+            EndIf
             
             PokeS(*Client\TX_Frame()\Data, Response, -1, #PB_Ascii | #PB_String_NoZero)
             
           EndIf
           
-          Break
+          ProcedureReturn #True
         EndIf
       EndIf
       
@@ -433,154 +470,161 @@ Module WebSocket_Server
     Protected *Temp_Data
     Protected Mask.l, *Pointer_Mask.Long
     Protected *Eight_Bytes.Eight_Bytes
+    Protected *TempFrame.Frame
     Protected i
     
     If *Client\Event_Disconnect_Manually
-    	; #### Delete the last RX_Frame that is not fully received yet
-    	; TODO: Put the currently receiving RX_Frame into its own *Object field, and after it has been fully received append the frame to the RX_Frame list
-    	If LastElement(*Client\RX_Frame()) And Not *Client\RX_Frame()\Done
-    		FreeMemory(*Client\RX_Frame()\Data)
-        DeleteElement(*Client\RX_Frame())
-    	EndIf
-    	
       ProcedureReturn #False
     EndIf
     
-    If ListSize(*Client\RX_Frame()) = 0
-      AddElement(*Client\RX_Frame())
-      *Client\RX_Frame()\RxTx_Size = 2
-    EndIf
-    
-    While LastElement(*Client\RX_Frame())
-      
-      ; #### Add new element if the current element is received completely.
-      If *Client\RX_Frame()\Done
-        AddElement(*Client\RX_Frame())
-        *Client\RX_Frame()\RxTx_Size = 2
-      EndIf
+    Repeat
+    	
+    	; #### Create new temporary frame if there is none yet.
+    	If Not *Client\New_RX_FRAME
+	    	*Client\New_RX_FRAME = AllocateStructure(Frame) ; This will be purged when the packet is fully received, when the client is deleted or when the server is freed.
+	    	If Not *Client\New_RX_FRAME
+	    		*Client\Event_Disconnect_Manually = #True
+	    		ProcedureReturn #False
+	    	EndIf
+	      *Client\New_RX_FRAME\RxTx_Size = 2
+	    EndIf
+	    
+	    *TempFrame = *Client\New_RX_FRAME
       
       ; #### Check if the frame exceeds the max. frame-size
-      If *Client\RX_Frame()\Payload_Size > *Object\Frame_Payload_Max
+      If *TempFrame\Payload_Size > *Object\Frame_Payload_Max
         *Client\Event_Disconnect_Manually = #True
         ProcedureReturn #False
       EndIf
       
-      ;TODO: Make this similar to the allocation in Thread_Receive_Handshake()
       ; #### Manage memory
-      If Not *Client\RX_Frame()\Data
-        *Client\RX_Frame()\Data = AllocateMemory(#Frame_Data_Size_Min)
+      If Not *TempFrame\Data
+        *TempFrame\Data = AllocateMemory(#Frame_Data_Size_Min) ; This will be purged when the client is deleted or when the server is freed, otherwise it will be reused in RX_Frame.
+        If Not *TempFrame\Data
+        	*Client\Event_Disconnect_Manually = #True
+          ProcedureReturn #False
+        EndIf
       EndIf
-      If MemorySize(*Client\RX_Frame()\Data) < *Client\RX_Frame()\RxTx_Size + 3                   ; #### Add 3 bytes so that the (de)masking doesn't write outside of the buffer
-        *Temp_Data = ReAllocateMemory(*Client\RX_Frame()\Data, *Client\RX_Frame()\RxTx_Size + 3)
+      If MemorySize(*TempFrame\Data) < *TempFrame\RxTx_Size + 3                   ; #### Add 3 bytes so that the (de)masking doesn't write outside of the buffer
+        *Temp_Data = ReAllocateMemory(*TempFrame\Data, *TempFrame\RxTx_Size + 3)
         If *Temp_Data
-          *Client\RX_Frame()\Data = *Temp_Data
+          *TempFrame\Data = *Temp_Data
         Else
-          FreeMemory(*Client\RX_Frame()\Data)
-          DeleteElement(*Client\RX_Frame())
           *Client\Event_Disconnect_Manually = #True
           ProcedureReturn #False
         EndIf
       EndIf
       
       ; #### Calculate how many bytes need to be received
-      Receive_Size = *Client\RX_Frame()\RxTx_Size - *Client\RX_Frame()\RxTx_Pos
+      Receive_Size = *TempFrame\RxTx_Size - *TempFrame\RxTx_Pos
       
       ; #### Receive...
-      Result = ReceiveNetworkData(*Client\ID, *Client\RX_Frame()\Data + *Client\RX_Frame()\RxTx_Pos, Receive_Size)
+      Result = ReceiveNetworkData(*Client\ID, *TempFrame\Data + *TempFrame\RxTx_Pos, Receive_Size)
       If Result > 0
-        *Client\RX_Frame()\RxTx_Pos + Result
+        *TempFrame\RxTx_Pos + Result
       Else
         ProcedureReturn #False
       EndIf
       
       ; #### Recalculate the size of the current frame (Only if all data is received)
-      If *Client\RX_Frame()\RxTx_Pos >= *Client\RX_Frame()\RxTx_Size
+      If *TempFrame\RxTx_Pos >= *TempFrame\RxTx_Size
         
         ; #### Size of the first 2 byte in the header
-        *Client\RX_Frame()\RxTx_Size = 2
+        *TempFrame\RxTx_Size = 2
         
         ; #### Determine the length of the payload
-        Select *Client\RX_Frame()\Data\Length\Length & %01111111
+        Select *TempFrame\Data\Length\Length & %01111111
           Case 0 To 125
-            *Client\RX_Frame()\Payload_Size = *Client\RX_Frame()\Data\Length\Length & %01111111
+            *TempFrame\Payload_Size = *TempFrame\Data\Length\Length & %01111111
             
           Case 126
-            *Client\RX_Frame()\RxTx_Size + 2
-            If *Client\RX_Frame()\RxTx_Pos = *Client\RX_Frame()\RxTx_Size
-              *Eight_Bytes = @*Client\RX_Frame()\Payload_Size
-              *Eight_Bytes\Byte[1] = *Client\RX_Frame()\Data\Length\Extended[0]
-              *Eight_Bytes\Byte[0] = *Client\RX_Frame()\Data\Length\Extended[1]
+            *TempFrame\RxTx_Size + 2
+            If *TempFrame\RxTx_Pos = *TempFrame\RxTx_Size
+              *Eight_Bytes = @*TempFrame\Payload_Size
+              *Eight_Bytes\Byte[1] = *TempFrame\Data\Length\Extended[0]
+              *Eight_Bytes\Byte[0] = *TempFrame\Data\Length\Extended[1]
             EndIf
             
           Case 127
-            *Client\RX_Frame()\RxTx_Size + 8
-            If *Client\RX_Frame()\RxTx_Pos = *Client\RX_Frame()\RxTx_Size
-              *Eight_Bytes = @*Client\RX_Frame()\Payload_Size
-              *Eight_Bytes\Byte[7] = *Client\RX_Frame()\Data\Length\Extended[0]
-              *Eight_Bytes\Byte[6] = *Client\RX_Frame()\Data\Length\Extended[1]
-              *Eight_Bytes\Byte[5] = *Client\RX_Frame()\Data\Length\Extended[2]
-              *Eight_Bytes\Byte[4] = *Client\RX_Frame()\Data\Length\Extended[3]
-              *Eight_Bytes\Byte[3] = *Client\RX_Frame()\Data\Length\Extended[4]
-              *Eight_Bytes\Byte[2] = *Client\RX_Frame()\Data\Length\Extended[5]
-              *Eight_Bytes\Byte[1] = *Client\RX_Frame()\Data\Length\Extended[6]
-              *Eight_Bytes\Byte[0] = *Client\RX_Frame()\Data\Length\Extended[7]
+            *TempFrame\RxTx_Size + 8
+            If *TempFrame\RxTx_Pos = *TempFrame\RxTx_Size
+              *Eight_Bytes = @*TempFrame\Payload_Size
+              *Eight_Bytes\Byte[7] = *TempFrame\Data\Length\Extended[0]
+              *Eight_Bytes\Byte[6] = *TempFrame\Data\Length\Extended[1]
+              *Eight_Bytes\Byte[5] = *TempFrame\Data\Length\Extended[2]
+              *Eight_Bytes\Byte[4] = *TempFrame\Data\Length\Extended[3]
+              *Eight_Bytes\Byte[3] = *TempFrame\Data\Length\Extended[4]
+              *Eight_Bytes\Byte[2] = *TempFrame\Data\Length\Extended[5]
+              *Eight_Bytes\Byte[1] = *TempFrame\Data\Length\Extended[6]
+              *Eight_Bytes\Byte[0] = *TempFrame\Data\Length\Extended[7]
             EndIf
             
         EndSelect
         
-        If *Client\RX_Frame()\RxTx_Pos >= *Client\RX_Frame()\RxTx_Size
+        If *TempFrame\RxTx_Pos >= *TempFrame\RxTx_Size
           
           ; #### Add the payload length to the size of the frame data
-          *Client\RX_Frame()\RxTx_Size + *Client\RX_Frame()\Payload_Size
+          *TempFrame\RxTx_Size + *TempFrame\Payload_Size
           
           ; #### Check if there is a mask
-          If *Client\RX_Frame()\Data\Byte[1] & %10000000
-            *Client\RX_Frame()\RxTx_Size + 4
+          If *TempFrame\Data\Byte[1] & %10000000
+            *TempFrame\RxTx_Size + 4
           EndIf
           
-          *Client\RX_Frame()\Payload_Pos = *Client\RX_Frame()\RxTx_Size - *Client\RX_Frame()\Payload_Size
+          *TempFrame\Payload_Pos = *TempFrame\RxTx_Size - *TempFrame\Payload_Size
           
         EndIf
         
       EndIf
       
-      ; #### Check if the frame is received completely
-      If *Client\RX_Frame()\RxTx_Pos >= *Client\RX_Frame()\RxTx_Size
+      ; #### Check if the frame is received completely.
+      If *TempFrame\RxTx_Pos >= *TempFrame\RxTx_Size
         
         ; #### (De)masking
-        If *Client\RX_Frame()\Data\Byte[1] & %10000000
+        If *TempFrame\Data\Byte[1] & %10000000
           ; #### Get mask
-          Mask = PeekL(*Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos - 4)
+          Mask = PeekL(*TempFrame\Data + *TempFrame\Payload_Pos - 4)
           
           ; #### XOr mask
-          *Pointer_Mask = *Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos
-          For i = 0 To *Client\RX_Frame()\Payload_Size-1 Step 4
+          *Pointer_Mask = *TempFrame\Data + *TempFrame\Payload_Pos
+          For i = 0 To *TempFrame\Payload_Size-1 Step 4
             *Pointer_Mask\l = *Pointer_Mask\l ! Mask
             *Pointer_Mask + 4
           Next
           
         EndIf
         
-        ; #### Frame is done and can be forwarded to the application
-        *Client\RX_Frame()\Done = #True
-        
         ; #### Check type of frame.
-        Select *Object\Client()\RX_Frame()\Data\Byte[0] & %00001111
+        Select *TempFrame\Data\Byte[0] & %00001111
           Case #Opcode_Continuation       ; continuation frame
           Case #Opcode_Text               ; text frame
           Case #Opcode_Binary             ; binary frame
           Case #Opcode_Connection_Close   ; connection close
             *Client\Event_Disconnect_Manually = #True
+            ; #### Still forward the frame to the user/application.
           Case #Opcode_Ping               ; ping
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, *Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos, *Client\RX_Frame()\Payload_Size)
+            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, *TempFrame\Data + *TempFrame\Payload_Pos, *TempFrame\Payload_Size)
           Case #Opcode_Pong               ; pong
           Default                         ; undefined
             Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
             ProcedureReturn #False
         EndSelect
+        
+        ; #### Move this frame into the RX_Frame list.
+        LastElement(*Client\RX_Frame())
+        AddElement(*Client\RX_Frame())
+        *Client\RX_Frame()\Data = *TempFrame\Data
+        *Client\RX_Frame()\Payload_Pos = *TempFrame\Payload_Pos
+        *Client\RX_Frame()\Payload_Size = *TempFrame\Payload_Size
+        *Client\RX_Frame()\RxTx_Pos = *TempFrame\RxTx_Pos
+        *Client\RX_Frame()\RxTx_Size = *TempFrame\RxTx_Size
+        
+        ; #### Remove temporary frame, but don't free the memory, as it is used in the RX_Frame list now.
+        FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
+        
       EndIf
       
-    Wend
+    ForEver
     
     ProcedureReturn #True
   EndProcedure
@@ -607,7 +651,7 @@ Module WebSocket_Server
       
       If Transmit_Size <= 0
         ; #### Frame can be deleted
-        FreeMemory(*Client\TX_Frame()\Data)
+        FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
         DeleteElement(*Client\TX_Frame())
       EndIf
       
@@ -684,16 +728,33 @@ Module WebSocket_Server
     ForEach *Object\Client()
       ; #### Free all RX_Frames()
       ForEach *Object\Client()\RX_Frame()
-        FreeMemory(*Object\Client()\RX_Frame()\Data)
+      	If *Object\Client()\RX_Frame()\Data
+        	FreeMemory(*Object\Client()\RX_Frame()\Data) : *Object\Client()\RX_Frame()\Data = #Null
+        EndIf
       Next
       
       ; #### Free all TX_Frames()
       ForEach *Object\Client()\TX_Frame()
-        FreeMemory(*Object\Client()\TX_Frame()\Data)
+      	If *Object\Client()\TX_Frame()\Data
+        	FreeMemory(*Object\Client()\TX_Frame()\Data) : *Object\Client()\TX_Frame()\Data = #Null
+        EndIf
       Next
+      
+      ; #### Free HTTP header data, if still present
+      If *Object\Client()\HTTP_Header\Data
+       	FreeMemory(*Object\Client()\HTTP_Header\Data) : *Object\Client()\HTTP_Header\Data = #Null
+      EndIf
+      
+      ; #### Free temporary RX frame
+      If *Object\Client()\New_RX_FRAME
+      	If *Object\Client()\New_RX_FRAME\Data
+      		FreeMemory(*Object\Client()\New_RX_FRAME\Data) : *Object\Client()\New_RX_FRAME\Data = #Null
+      	EndIf
+      	FreeStructure(*Object\Client()\New_RX_FRAME) : *Object\Client()\New_RX_FRAME = #Null
+      EndIf
     Next
     
-    FreeMutex(*Object\Mutex)
+    FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
     FreeStructure(*Object)
   EndProcedure
   
@@ -709,7 +770,7 @@ Module WebSocket_Server
       Wend
     Until *Object\Free_Event
     
-    FreeSemaphore(*Object\Event_Semaphore)
+    FreeSemaphore(*Object\Event_Semaphore) : *Object\Event_Semaphore = #Null
   EndProcedure
   
   Procedure Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
@@ -744,6 +805,10 @@ Module WebSocket_Server
     If AddElement(*Client\TX_Frame())
       
       *Client\TX_Frame()\Data = AllocateMemory(10 + Payload_Size)
+      If Not *Client\TX_Frame()\Data
+      	*Client\Event_Disconnect_Manually = #True
+      	ProcedureReturn #False
+      EndIf
       
       ; #### FIN, RSV and Opcode
       *Pointer = *Client\TX_Frame()\Data
@@ -781,9 +846,10 @@ Module WebSocket_Server
         *Client\TX_Frame()\RxTx_Size + Payload_Size
       EndIf
       
+      ProcedureReturn #True
     EndIf
     
-    ProcedureReturn #True
+    ProcedureReturn #False
   EndProcedure
   
   Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
@@ -861,8 +927,21 @@ Module WebSocket_Server
         EndIf
         ; #### Free all TX_Frames()
         ForEach *Client\TX_Frame()
-          FreeMemory(*Client\TX_Frame()\Data)
+        	If *Client\TX_Frame()\Data
+          	FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
+          EndIf
         Next
+        ; #### Free HTTP header data, if still present
+        If *Client\HTTP_Header\Data
+	       	FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
+        EndIf
+        ; #### Free temporary RX frame
+        If *Client\New_RX_FRAME
+        	If *Client\New_RX_FRAME\Data
+        		FreeMemory(*Client\New_RX_FRAME\Data) : *Client\New_RX_FRAME\Data = #Null
+        	EndIf
+        	FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
+        EndIf
         DeleteElement(*Object\Client())
         UnlockMutex(*Object\Mutex)
         ProcedureReturn #True
@@ -880,13 +959,24 @@ Module WebSocket_Server
         If *Client\ID
           CloseNetworkConnection(*Client\ID)
         EndIf
+        ; #### Free HTTP header data, if still present
+        If *Client\HTTP_Header\Data
+	       	FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
+        EndIf
+        ; #### Free temporary RX frame
+        If *Client\New_RX_FRAME
+        	If *Client\New_RX_FRAME\Data
+        		FreeMemory(*Client\New_RX_FRAME\Data) : *Client\New_RX_FRAME\Data = #Null
+        	EndIf
+        	FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
+        EndIf
         DeleteElement(*Object\Client())
         UnlockMutex(*Object\Mutex)
         ProcedureReturn #True
       EndIf
       
       ; #### Event: Frame available
-      If FirstElement(*Client\RX_Frame()) And *Client\RX_Frame()\Done
+      If FirstElement(*Client\RX_Frame())
         Event_Frame\Fin = *Client\RX_Frame()\Data\Byte[0] >> 7 & %00000001
         Event_Frame\RSV = *Client\RX_Frame()\Data\Byte[0] >> 4 & %00000111
         Event_Frame\Opcode = *Client\RX_Frame()\Data\Byte[0] & %00001111
@@ -897,8 +987,10 @@ Module WebSocket_Server
         *Callback(*Object, *Client, #Event_Frame, Event_Frame)
         LockMutex(*Object\Mutex)
         
-        FirstElement(*Client\RX_Frame()) ; Restore frame that may be changed while the mutex was unlocked. New elements are appended to the list, and the first element (with \Done = true) will only be deleted here. So FirstElement() will change to the same element as previously.
-        FreeMemory(*Client\RX_Frame()\Data)
+        FirstElement(*Client\RX_Frame()) ; Restore frame that may be changed while the mutex was unlocked. New elements are appended to the list, and the first element will only be deleted here. So FirstElement() will change to the same element as previously.
+        If *Client\RX_Frame()\Data
+        	FreeMemory(*Client\RX_Frame()\Data) : *Client\RX_Frame()\Data = #Null
+        EndIf
         DeleteElement(*Client\RX_Frame())
         
         UnlockMutex(*Object\Mutex)
@@ -947,7 +1039,7 @@ Module WebSocket_Server
     If *Event_Thread_Callback
       *Object\Event_Semaphore = CreateSemaphore()
       If Not *Object\Event_Semaphore
-        FreeMutex(*Object\Mutex)
+        FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
         FreeStructure(*Object)
         ProcedureReturn #Null
       EndIf
@@ -955,17 +1047,17 @@ Module WebSocket_Server
     
     *Object\Server_ID = CreateNetworkServer(#PB_Any, Port, #PB_Network_TCP)
     If Not *Object\Server_ID
-      FreeMutex(*Object\Mutex)
-      If *Object\Event_Semaphore : FreeSemaphore(*Object\Event_Semaphore) : EndIf
+      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
+      If *Object\Event_Semaphore : FreeSemaphore(*Object\Event_Semaphore) : *Object\Event_Semaphore = #Null : EndIf
       FreeStructure(*Object)
       ProcedureReturn #Null
     EndIf
     
     *Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
     If Not *Object\Network_Thread_ID
-      FreeMutex(*Object\Mutex)
-      If *Object\Event_Semaphore : FreeSemaphore(*Object\Event_Semaphore) : EndIf
-      CloseNetworkServer(*Object\Server_ID)
+      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
+      If *Object\Event_Semaphore : FreeSemaphore(*Object\Event_Semaphore) : *Object\Event_Semaphore = #Null : EndIf
+      CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
       FreeStructure(*Object)
       ProcedureReturn #Null
     EndIf
@@ -1008,8 +1100,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 265
-; FirstLine = 221
+; CursorPosition = 112
+; FirstLine = 64
 ; Folding = ---
 ; EnableThread
 ; EnableXP
