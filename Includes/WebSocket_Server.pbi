@@ -81,7 +81,7 @@
 ; - V1.000 (09.10.2020)
 ;   - Fix issue with some HTTP header fields and values not being treated case-insensitive.
 ; 
-; - V1.002 (09.02.2021)
+; - V1.003 (09.02.2021)
 ;   - Fix typos and misspelled words
 ;   - Remove Event_Disconnect field from client
 ;   - Don't break loop in Thread_Receive_Frame() after every packet
@@ -98,6 +98,7 @@
 ;   - Null any freed memory or structure pointer
 ;   - Prevent client to receive HTTP header if there is a forced disconnect
 ;   - Limit HTTP header allocation size
+;   - Add internal function Client_Free() that frees everything that is allocated by a client
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -111,7 +112,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1002
+  #Version = 1003
   
   Enumeration
     #Event_None
@@ -327,6 +328,37 @@ Module WebSocket_Server
     FreeMemory(*Temp_Data_3)
     
     ProcedureReturn Result
+  EndProcedure
+  
+  Procedure Client_Free(*Client.Client)
+  	; #### Free all RX_Frames()
+    While FirstElement(*Client\RX_Frame())
+    	If *Client\RX_Frame()\Data
+      	FreeMemory(*Client\RX_Frame()\Data) : *Client\RX_Frame()\Data = #Null
+      EndIf
+      DeleteElement(*Client\RX_Frame())
+    Wend
+    
+    ; #### Free all TX_Frames()
+    While FirstElement(*Client\TX_Frame())
+    	If *Client\TX_Frame()\Data
+      	FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
+      EndIf
+      DeleteElement(*Client\TX_Frame())
+    Wend
+    
+    ; #### Free HTTP header data, if still present
+    If *Client\HTTP_Header\Data
+     	FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
+    EndIf
+    
+    ; #### Free temporary RX frame
+    If *Client\New_RX_FRAME
+    	If *Client\New_RX_FRAME\Data
+    		FreeMemory(*Client\New_RX_FRAME\Data) : *Client\New_RX_FRAME\Data = #Null
+    	EndIf
+    	FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
+    EndIf
   EndProcedure
   
   Procedure Thread_Receive_Handshake(*Object.Object, *Client.Client)
@@ -726,32 +758,7 @@ Module WebSocket_Server
     
     ; No need to care about the event thread, as it is shut down before cleanup happens here
     ForEach *Object\Client()
-      ; #### Free all RX_Frames()
-      ForEach *Object\Client()\RX_Frame()
-      	If *Object\Client()\RX_Frame()\Data
-        	FreeMemory(*Object\Client()\RX_Frame()\Data) : *Object\Client()\RX_Frame()\Data = #Null
-        EndIf
-      Next
-      
-      ; #### Free all TX_Frames()
-      ForEach *Object\Client()\TX_Frame()
-      	If *Object\Client()\TX_Frame()\Data
-        	FreeMemory(*Object\Client()\TX_Frame()\Data) : *Object\Client()\TX_Frame()\Data = #Null
-        EndIf
-      Next
-      
-      ; #### Free HTTP header data, if still present
-      If *Object\Client()\HTTP_Header\Data
-       	FreeMemory(*Object\Client()\HTTP_Header\Data) : *Object\Client()\HTTP_Header\Data = #Null
-      EndIf
-      
-      ; #### Free temporary RX frame
-      If *Object\Client()\New_RX_FRAME
-      	If *Object\Client()\New_RX_FRAME\Data
-      		FreeMemory(*Object\Client()\New_RX_FRAME\Data) : *Object\Client()\New_RX_FRAME\Data = #Null
-      	EndIf
-      	FreeStructure(*Object\Client()\New_RX_FRAME) : *Object\Client()\New_RX_FRAME = #Null
-      EndIf
+      Client_Free(*Object\Client())
     Next
     
     FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
@@ -925,23 +932,8 @@ Module WebSocket_Server
           LockMutex(*Object\Mutex)
           ChangeCurrentElement(*Object\Client(), *Client) ; It may be possible that the current element got changed while the mutex was unlocked
         EndIf
-        ; #### Free all TX_Frames()
-        ForEach *Client\TX_Frame()
-        	If *Client\TX_Frame()\Data
-          	FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
-          EndIf
-        Next
-        ; #### Free HTTP header data, if still present
-        If *Client\HTTP_Header\Data
-	       	FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
-        EndIf
-        ; #### Free temporary RX frame
-        If *Client\New_RX_FRAME
-        	If *Client\New_RX_FRAME\Data
-        		FreeMemory(*Client\New_RX_FRAME\Data) : *Client\New_RX_FRAME\Data = #Null
-        	EndIf
-        	FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
-        EndIf
+        ; #### Delete the client and all its data.
+        Client_Free(*Client)
         DeleteElement(*Object\Client())
         UnlockMutex(*Object\Mutex)
         ProcedureReturn #True
@@ -959,17 +951,8 @@ Module WebSocket_Server
         If *Client\ID
           CloseNetworkConnection(*Client\ID)
         EndIf
-        ; #### Free HTTP header data, if still present
-        If *Client\HTTP_Header\Data
-	       	FreeMemory(*Client\HTTP_Header\Data) : *Client\HTTP_Header\Data = #Null
-        EndIf
-        ; #### Free temporary RX frame
-        If *Client\New_RX_FRAME
-        	If *Client\New_RX_FRAME\Data
-        		FreeMemory(*Client\New_RX_FRAME\Data) : *Client\New_RX_FRAME\Data = #Null
-        	EndIf
-        	FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
-        EndIf
+        ; #### Delete the client and all its data.
+        Client_Free(*Client)
         DeleteElement(*Object\Client())
         UnlockMutex(*Object\Mutex)
         ProcedureReturn #True
@@ -1100,8 +1083,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 112
-; FirstLine = 64
+; CursorPosition = 975
+; FirstLine = 946
 ; Folding = ---
 ; EnableThread
 ; EnableXP
