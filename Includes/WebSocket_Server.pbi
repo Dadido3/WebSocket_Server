@@ -111,6 +111,8 @@
 ;   - Send signal to event thread every time a packet has been sent
 ;   - Use local pointer to frame data in Event_Callback
 ;   - Get rid of unnecessary second FirstElement()
+;   - Check if control frames are fragmented
+;   - Don't execute frame actions on malformed frames
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -915,6 +917,7 @@ Module WebSocket_Server
     Protected Event_Frame.Event_Frame
     Protected *Client.Client
     Protected *Frame_Data.Frame_Header
+    Protected MalformedFrame.a
     
     If Not *Object
       ProcedureReturn #False
@@ -983,31 +986,43 @@ Module WebSocket_Server
         Event_Frame\Payload = *Frame_Data + *Client\RX_Frame()\Payload_Pos
         Event_Frame\Payload_Size = *Client\RX_Frame()\Payload_Size
         
-        ; #### Do default actions for specific opcodes.
-        Select Event_Frame\Opcode
-          Case #Opcode_Continuation       ; continuation frame
-          Case #Opcode_Text               ; text frame
-          Case #Opcode_Binary             ; binary frame
-          Case #Opcode_Connection_Close   ; connection close
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
-          Case #Opcode_Ping               ; ping
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, Event_Frame\Payload, Event_Frame\Payload_Size)
-          Case #Opcode_Pong               ; pong
-          Default                         ; undefined
-            *Client\Event_Disconnect_Manually = #True
-        EndSelect
-        
         ; #### Remove RX_Frame. Its data is freed below, after it has been read by the user/application.
         DeleteElement(*Client\RX_Frame())
         
-        ; #### Check if no extension bit is set. This lib doesn't support any extensions.
-        If Event_Frame\RSV = 0
-	        UnlockMutex(*Object\Mutex)
-	        *Callback(*Object, *Client, #Event_Frame, Event_Frame)
-	      Else
-	      	; #### Close connection as some extension bit was set.
+        ; #### Check if any extension bit is set. This lib doesn't support any extensions.
+        If Event_Frame\RSV <> 0
+        	MalformedFrame = #True
+        EndIf
+        
+        ; #### Check if a control frame is being fragmented.
+        If Bool(Event_Frame\Opcode & %1000) And Event_Frame\Fin = #False
+        	MalformedFrame = #True
+        EndIf
+        
+        ; #### Do default actions for specific opcodes.
+        If Not MalformedFrame
+	        Select Event_Frame\Opcode
+	          Case #Opcode_Continuation       ; continuation frame
+	          Case #Opcode_Text               ; text frame
+	          Case #Opcode_Binary             ; binary frame
+	          Case #Opcode_Connection_Close   ; connection close
+	            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+	          Case #Opcode_Ping               ; ping
+	            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, Event_Frame\Payload, Event_Frame\Payload_Size)
+	          Case #Opcode_Pong               ; pong
+	          Default                         ; undefined
+	            MalformedFrame = #True
+	        EndSelect
+	      EndIf
+	              
+        If MalformedFrame
+        	; #### Close connection as some extension bit was set.
 		      *Client\Event_Disconnect_Manually = #True
 		      UnlockMutex(*Object\Mutex)
+        Else
+        	; #### Forward event to application/user.
+	        UnlockMutex(*Object\Mutex)
+	        *Callback(*Object, *Client, #Event_Frame, Event_Frame)
 	      EndIf
         
         If *Frame_Data
@@ -1120,8 +1135,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 1015
-; FirstLine = 979
+; CursorPosition = 114
+; FirstLine = 98
 ; Folding = ---
 ; EnableThread
 ; EnableXP
