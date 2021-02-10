@@ -1,0 +1,4 @@
+*.exe
+Thumbs.db
+
+/Fuzzing/reports

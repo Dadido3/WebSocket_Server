@@ -177,9 +177,9 @@ Repeat
   Next
   UnlockMutex(Mutex)
 ForEver
-; IDE Options = PureBasic 5.61 (Windows - x64)
-; CursorPosition = 95
-; FirstLine = 58
+; IDE Options = PureBasic 5.72 (Windows - x64)
+; CursorPosition = 166
+; FirstLine = 126
 ; Folding = -
 ; EnableThread
 ; EnableXP
