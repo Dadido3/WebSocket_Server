@@ -99,6 +99,11 @@
 ;   - Prevent client to receive HTTP header if there is a forced disconnect
 ;   - Limit HTTP header allocation size
 ;   - Add internal function Client_Free() that frees everything that is allocated by a client
+; 
+; - Dev (10.02.2021)
+;   - Use Autobahn|Testsuite for fuzzing
+;   - Fix test case 1.1.1
+;   - Fix how server closes the connection on client request
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -112,7 +117,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1003
+  #Version = 0
   
   Enumeration
     #Event_None
@@ -632,8 +637,7 @@ Module WebSocket_Server
           Case #Opcode_Text               ; text frame
           Case #Opcode_Binary             ; binary frame
           Case #Opcode_Connection_Close   ; connection close
-            *Client\Event_Disconnect_Manually = #True
-            ; #### Still forward the frame to the user/application.
+            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
           Case #Opcode_Ping               ; ping
             Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, *TempFrame\Data + *TempFrame\Payload_Pos, *TempFrame\Payload_Size)
           Case #Opcode_Pong               ; pong
@@ -880,7 +884,10 @@ Module WebSocket_Server
     Protected Result
     
     Temp_Size = StringByteLength(Text, #PB_UTF8)
-    If Temp_Size <= 0
+    If Temp_Size = 0
+      ProcedureReturn Frame_Send(*Object, *Client, #True, 0, #Opcode_Text, #Null, 0)
+    EndIf
+    If Temp_Size < 0
       ProcedureReturn #False
     EndIf
     *Temp = AllocateMemory(Temp_Size)
@@ -1083,8 +1090,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 975
-; FirstLine = 946
+; CursorPosition = 105
+; FirstLine = 66
 ; Folding = ---
 ; EnableThread
 ; EnableXP
