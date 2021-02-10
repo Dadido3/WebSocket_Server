@@ -104,6 +104,7 @@
 ;   - Use Autobahn|Testsuite for fuzzing
 ;   - Fix test case 1.1.1
 ;   - Fix how server closes the connection on client request
+;   - Fix data frame length encoding for transmitted packets
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -831,7 +832,7 @@ Module WebSocket_Server
         Case 0 To 125
           *Pointer\a = Payload_Size       : *Pointer + 1
           *Client\TX_Frame()\RxTx_Size + 1
-        Case 126 To 65536
+        Case 126 To 65535
           *Eight_Bytes = @Payload_Size
           *Pointer\a = 126                  : *Pointer + 1
           *Pointer\a = *Eight_Bytes\Byte[1] : *Pointer + 1
@@ -864,8 +865,6 @@ Module WebSocket_Server
   EndProcedure
   
   Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
-    Protected *Pointer.Ascii
-    Protected *Eight_Bytes.Eight_Bytes
     Protected Result
     
     If Not *Object
@@ -1090,8 +1089,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 105
-; FirstLine = 66
+; CursorPosition = 106
+; FirstLine = 76
 ; Folding = ---
 ; EnableThread
 ; EnableXP
