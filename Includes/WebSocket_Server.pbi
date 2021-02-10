@@ -106,6 +106,11 @@
 ;   - Fix how server closes the connection on client request
 ;   - Fix data frame length encoding for transmitted packets
 ;   - Limit the payload size of control frames (defined by websocket standard)
+;   - Free semaphore right before the server thread ends, not when the event thread ends
+;   - Move built in frame actions (ping and disconnect request handling) into Event_Callback so the actions stay in sync with everything else
+;   - Send signal to event thread every time a packet has been sent
+;   - Use local pointer to frame data in Event_Callback
+;   - Get rid of unnecessary second FirstElement()
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -643,21 +648,6 @@ Module WebSocket_Server
           
         EndIf
         
-        ; #### Check type of frame.
-        Select *TempFrame\Data\Byte[0] & %00001111
-          Case #Opcode_Continuation       ; continuation frame
-          Case #Opcode_Text               ; text frame
-          Case #Opcode_Binary             ; binary frame
-          Case #Opcode_Connection_Close   ; connection close
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
-          Case #Opcode_Ping               ; ping
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, *TempFrame\Data + *TempFrame\Payload_Pos, *TempFrame\Payload_Size)
-          Case #Opcode_Pong               ; pong
-          Default                         ; undefined
-            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
-            ProcedureReturn #False
-        EndSelect
-        
         ; #### Move this frame into the RX_Frame list.
         LastElement(*Client\RX_Frame())
         AddElement(*Client\RX_Frame())
@@ -701,6 +691,11 @@ Module WebSocket_Server
         ; #### Frame can be deleted
         FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
         DeleteElement(*Client\TX_Frame())
+        
+        ; #### The event thread (if no polling is used) may have to handle stuff, send a signal.
+	    	If *Object\Event_Semaphore
+		      SignalSemaphore(*Object\Event_Semaphore)
+		    EndIf
       EndIf
       
     Wend
@@ -777,6 +772,10 @@ Module WebSocket_Server
       Client_Free(*Object\Client())
     Next
     
+    If *Object\Event_Semaphore
+    	FreeSemaphore(*Object\Event_Semaphore) : *Object\Event_Semaphore = #Null
+    EndIf
+    
     FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
     FreeStructure(*Object)
   EndProcedure
@@ -792,8 +791,6 @@ Module WebSocket_Server
       While Event_Callback(*Object, *Object\Event_Thread_Callback) And Not *Object\Free_Event
       Wend
     Until *Object\Free_Event
-    
-    FreeSemaphore(*Object\Event_Semaphore) : *Object\Event_Semaphore = #Null
   EndProcedure
   
   Procedure Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
@@ -917,6 +914,7 @@ Module WebSocket_Server
   Procedure Event_Callback(*Object.Object, *Callback.Event_Callback)
     Protected Event_Frame.Event_Frame
     Protected *Client.Client
+    Protected *Frame_Data.Frame_Header
     
     If Not *Object
       ProcedureReturn #False
@@ -977,23 +975,45 @@ Module WebSocket_Server
       
       ; #### Event: Frame available
       If FirstElement(*Client\RX_Frame())
-        Event_Frame\Fin = *Client\RX_Frame()\Data\Byte[0] >> 7 & %00000001
-        Event_Frame\RSV = *Client\RX_Frame()\Data\Byte[0] >> 4 & %00000111
-        Event_Frame\Opcode = *Client\RX_Frame()\Data\Byte[0] & %00001111
-        Event_Frame\Payload = *Client\RX_Frame()\Data + *Client\RX_Frame()\Payload_Pos
+      	*Frame_Data = *Client\RX_Frame()\Data
+      	
+        Event_Frame\Fin = *Frame_Data\Byte[0] >> 7 & %00000001
+        Event_Frame\RSV = *Frame_Data\Byte[0] >> 4 & %00000111
+        Event_Frame\Opcode = *Frame_Data\Byte[0] & %00001111
+        Event_Frame\Payload = *Frame_Data + *Client\RX_Frame()\Payload_Pos
         Event_Frame\Payload_Size = *Client\RX_Frame()\Payload_Size
         
-        UnlockMutex(*Object\Mutex)
-        *Callback(*Object, *Client, #Event_Frame, Event_Frame)
-        LockMutex(*Object\Mutex)
+        ; #### Do default actions for specific opcodes.
+        Select Event_Frame\Opcode
+          Case #Opcode_Continuation       ; continuation frame
+          Case #Opcode_Text               ; text frame
+          Case #Opcode_Binary             ; binary frame
+          Case #Opcode_Connection_Close   ; connection close
+            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+          Case #Opcode_Ping               ; ping
+            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, Event_Frame\Payload, Event_Frame\Payload_Size)
+          Case #Opcode_Pong               ; pong
+          Default                         ; undefined
+            *Client\Event_Disconnect_Manually = #True
+        EndSelect
         
-        FirstElement(*Client\RX_Frame()) ; Restore frame that may be changed while the mutex was unlocked. New elements are appended to the list, and the first element will only be deleted here. So FirstElement() will change to the same element as previously.
-        If *Client\RX_Frame()\Data
-        	FreeMemory(*Client\RX_Frame()\Data) : *Client\RX_Frame()\Data = #Null
-        EndIf
+        ; #### Remove RX_Frame. Its data is freed below, after it has been read by the user/application.
         DeleteElement(*Client\RX_Frame())
         
-        UnlockMutex(*Object\Mutex)
+        ; #### Check if no extension bit is set. This lib doesn't support any extensions.
+        If Event_Frame\RSV = 0
+	        UnlockMutex(*Object\Mutex)
+	        *Callback(*Object, *Client, #Event_Frame, Event_Frame)
+	      Else
+	      	; #### Close connection as some extension bit was set.
+		      *Client\Event_Disconnect_Manually = #True
+		      UnlockMutex(*Object\Mutex)
+	      EndIf
+        
+        If *Frame_Data
+        	FreeMemory(*Frame_Data) : *Frame_Data = #Null
+        EndIf
+        
         ProcedureReturn #True
       EndIf
       
@@ -1100,8 +1120,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 107
-; FirstLine = 75
+; CursorPosition = 1015
+; FirstLine = 979
 ; Folding = ---
 ; EnableThread
 ; EnableXP
