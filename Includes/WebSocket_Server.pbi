@@ -105,6 +105,7 @@
 ;   - Fix test case 1.1.1
 ;   - Fix how server closes the connection on client request
 ;   - Fix data frame length encoding for transmitted packets
+;   - Limit the payload size of control frames (defined by websocket standard)
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -141,7 +142,8 @@ DeclareModule WebSocket_Server
   #RSV2 = %00000010
   #RSV3 = %00000001
   
-  #Frame_Payload_Max = 10000000  ; Default max. size of an incoming frame's payload. If the payload exceeds this value, the client will be disconnected.
+  #Frame_Payload_Max = 10000000    ; Default max. size of an incoming frame's payload. If the payload exceeds this value, the client will be disconnected.
+  #Frame_Control_Payload_Max = 125 ; Max. allowed amount of bytes in the payload of control frames. This is defined by the websocket standard.
   
   ; ##################################################### Public Structures ###########################################
   
@@ -529,10 +531,19 @@ Module WebSocket_Server
 	    
 	    *TempFrame = *Client\New_RX_FRAME
       
-      ; #### Check if the frame exceeds the max. frame-size
+      ; #### Check if the frame exceeds the max. frame-size.
       If *TempFrame\Payload_Size > *Object\Frame_Payload_Max
         *Client\Event_Disconnect_Manually = #True
         ProcedureReturn #False
+      EndIf
+      
+      ; #### Check if a control frame exceeds the max. payload size.
+      If *TempFrame\Payload_Size > #Frame_Control_Payload_Max
+      	; #### Control frames are identified by opcodes where the most significant bit of the opcode is 1.
+      	If *TempFrame\RxTx_Pos >= 1 And *TempFrame\Data\Byte[0] & %00001000 = %1000
+      		*Client\Event_Disconnect_Manually = #True
+        	ProcedureReturn #False
+      	EndIf
       EndIf
       
       ; #### Manage memory
@@ -1089,8 +1100,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 106
-; FirstLine = 76
+; CursorPosition = 107
+; FirstLine = 75
 ; Folding = ---
 ; EnableThread
 ; EnableXP
