@@ -118,6 +118,9 @@
 ;   - Add HandleFragmentation parameter to Create
 ;   - Add Fragments List to client, that stores a fragment frame series
 ;   - Add logic to combine fragmented frames
+;   - Allow fragmented messages to have a payload of 0 length
+;		- Add close status code enumeration
+;		- Add status code and reason to client disconnect
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -150,6 +153,22 @@ DeclareModule WebSocket_Server
     #Opcode_Pong
   EndEnumeration
   
+  Enumeration
+    #CloseStatusCode_Normal = 1000 			; indicates a normal closure, meaning that the purpose for which the connection was established has been fulfilled.
+    #CloseStatusCode_GoingAway					; indicates that an endpoint is "going away", such as a server going down or a browser having navigated away from a page.
+    #CloseStatusCode_ProtocolError 			; indicates that an endpoint is terminating the connection due to a protocol error.
+		#CloseStatusCode_UnhandledDataType	; indicates that an endpoint is terminating the connection because it has received a type of data it cannot accept (e.g., an endpoint that understands only text data MAY send this if it receives a binary message).
+		#CloseStatusCode_1004								; Reserved.  The specific meaning might be defined in the future.
+		#CloseStatusCode_NoStatusCode				; is a reserved value and MUST NOT be set as a status code in a Close control frame by an endpoint.  It is designated for use in applications expecting a status code to indicate that no status code was actually present.
+		#CloseStatusCode_AbnormalClose    	; is a reserved value and MUST NOT be set as a status code in a Close control frame by an endpoint.  It is designated for use in applications expecting a status code to indicate that the connection was closed abnormally, e.g., without sending or receiving a Close control frame.
+		#CloseStatusCode_1007								; indicates that an endpoint is terminating the connection because it has received data within a message that was not consistent with the type of the message (e.g., non-UTF-8 [RFC3629] data within a text message).
+		#CloseStatusCode_PolicyViolation    ; indicates that an endpoint is terminating the connection because it has received a message that violates its policy.  This is a generic status code that can be returned when there is no other more suitable status code (e.g., 1003 or 1009) or if there is a need to hide specific details about the policy.
+		#CloseStatusCode_SizeLimit					; indicates that an endpoint is terminating the connection because it has received a message that is too big for it to process.
+		#CloseStatusCode_1010
+		#CloseStatusCode_1011
+		#CloseStatusCode_1015
+  EndEnumeration
+  
   #RSV1 = %00000100
   #RSV2 = %00000010
   #RSV3 = %00000001
@@ -180,14 +199,14 @@ DeclareModule WebSocket_Server
   ; ##################################################### Public Procedures (Declares) ################################
   
   Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
-  Declare   Free(*Object)                                                                   ; Closes the WebSocket server.
+  Declare   Free(*Object)                                                                   				; Closes the WebSocket server.
   
-  Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       ; Sends a text-frame.
-  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)  ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary.
+  Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       				; Sends a text-frame.
+  Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)  				; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary.
    
-  Declare   Event_Callback(*Object, *Callback.Event_Callback)                               ; Checks for events, and calls the *Callback function if there are any.
+  Declare   Event_Callback(*Object, *Callback.Event_Callback)                               				; Checks for events, and calls the *Callback function if there are any.
   
-  Declare   Client_Disconnect(*Object, *Client)                                             ; Disconnects the specified *Client.
+  Declare   Client_Disconnect(*Object, *Client, StatusCode.u=#CloseStatusCode_Normal, reason.s="")	; Disconnects the specified *Client.
   
 EndDeclareModule
 
@@ -843,6 +862,7 @@ Module WebSocket_Server
     
     If Opcode = #Opcode_Connection_Close
     	*Client\Event_Disconnect_Manually = #True
+    	; TODO: Remove all other not yet sent frames
     EndIf
     
     LastElement(*Client\TX_Frame())
@@ -1030,7 +1050,11 @@ Module WebSocket_Server
 	          Case #Opcode_Text               ; text frame
 	          Case #Opcode_Binary             ; binary frame
 	          Case #Opcode_Connection_Close   ; connection close
-	            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+	          	If Event_Frame\Payload_Size >= 2
+	            	Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, Event_Frame\Payload, 2) ; This will also set the \Event_Disconnect_Manually flag
+	            Else
+	            	Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+	            EndIf
 	          Case #Opcode_Ping               ; ping
 	            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, Event_Frame\Payload, Event_Frame\Payload_Size)
 	          Case #Opcode_Pong               ; pong
@@ -1103,7 +1127,7 @@ Module WebSocket_Server
 				      				Event_Frame\Fin = #True
 				      				Event_Frame\RSV = 0
 				      				Event_Frame\Opcode = *Client\Fragments()\Opcode
-				      				Event_Frame\FrameData = AllocateMemory(*Client\Fragments_Size)
+				      				Event_Frame\FrameData = AllocateMemory(*Client\Fragments_Size+1)
 				      				Event_Frame\Payload = Event_Frame\FrameData
 				      				Event_Frame\Payload_Size = *Client\Fragments_Size
 				      				If Not Event_Frame\FrameData
@@ -1153,7 +1177,7 @@ Module WebSocket_Server
     ProcedureReturn #False
   EndProcedure
   
-  Procedure Client_Disconnect(*Object.Object, *Client.Client)
+  Procedure Client_Disconnect(*Object.Object, *Client.Client, statusCode.u=#CloseStatusCode_Normal, reason.s="")
     If Not *Object
       ProcedureReturn #False
     EndIf
@@ -1162,7 +1186,10 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
-    Frame_Send(*Object, *Client, 1, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+    Protected bigEndianStatusCode.u = ((StatusCode & $FF00) >> 8) | ((StatusCode & $FF) << 8)
+    ; TODO: Add reason string to disconnect frame
+    
+    Frame_Send(*Object, *Client, 1, 0, #Opcode_Connection_Close, @bigEndianStatusCode, SizeOf(bigEndianStatusCode)) ; This will also set the \Event_Disconnect_Manually flag
     
     ; #### Signal that there >may< be events to be handled by the event thread
     If *Object\Event_Semaphore
@@ -1251,8 +1278,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 118
-; FirstLine = 75
+; CursorPosition = 122
+; FirstLine = 76
 ; Folding = ---
 ; EnableThread
 ; EnableXP

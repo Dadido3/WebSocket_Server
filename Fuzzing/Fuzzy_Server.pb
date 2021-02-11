@@ -29,8 +29,13 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
         	Else
         		PrintN(" Echo message from:  " + *Client + " (" + Message + ")")
         	EndIf
-          WebSocket_Server::Frame_Text_Send(*Server, *Client, Message)
-          
+        	If CountString(Message, "�")
+        		; #### Invalid string, disconnect client. This will cause another test case to fail. Best would be to have something that checks UTF-8 string for validity.
+        		WebSocket_Server::Client_Disconnect(*Server, *Client, WebSocket_Server::#CloseStatusCode_1007)
+        	Else
+        		WebSocket_Server::Frame_Text_Send(*Server, *Client, Message)
+        	EndIf
+        	
         Case WebSocket_Server::#Opcode_Binary
         	PrintN(" Echo binary from:   " + *Client + " (" + *Event_Frame\Payload_Size + " bytes)")
           WebSocket_Server::Frame_Send(*Server, *Client, #True, 0, WebSocket_Server::#Opcode_Binary, *Event_Frame\Payload, *Event_Frame\Payload_Size)
@@ -40,7 +45,7 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
   EndSelect
 EndProcedure
 
-*Server = WebSocket_Server::Create(8090, @WebSocket_Event())
+*Server = WebSocket_Server::Create(8090, @WebSocket_Event(), 32000000)
 
 OpenConsole()
 
@@ -49,9 +54,11 @@ Repeat
 ForEver
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 27
+; CursorPosition = 47
+; FirstLine = 1
 ; Folding = -
 ; EnableThread
 ; EnableXP
+; DisableDebugger
 ; EnablePurifier = 1,1,1,1
 ; EnableUnicode
