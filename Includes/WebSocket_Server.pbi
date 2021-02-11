@@ -809,7 +809,7 @@ Module WebSocket_Server
       
       ; #### Delay only if there is nothing to do
       If Not Busy
-        Delay(10)
+        Delay(1)
       EndIf
       
     Until *Object\Free
@@ -871,10 +871,7 @@ Module WebSocket_Server
     	*Client\Event_Disconnect_Manually = #True
     	
     	; #### Remove all TX_Frame elements (Except the one that is being sent right now).
-    	While LastElement(*Client\TX_Frame())
-    		If *Client\TX_Frame()\RxTx_Pos > 0
-    			Break
-    		EndIf
+    	While LastElement(*Client\TX_Frame()) And ListIndex(*Client\TX_Frame()) > 0
     		If *Client\TX_Frame()\Data
     			FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
     		EndIf
@@ -1321,8 +1318,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 126
-; FirstLine = 105
+; CursorPosition = 809
+; FirstLine = 768
 ; Folding = ---
 ; EnableThread
 ; EnableXP
