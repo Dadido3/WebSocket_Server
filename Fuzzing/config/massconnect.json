@@ -1,0 +1,14 @@
+{
+    "servers": [
+        {
+            "name": "PureBasic WebSocket server",
+            "uri": "ws://host.docker.internal:8090"
+        }
+    ],
+    "options": {
+        "connections": 10000,
+        "batchsize": 100,
+        "batchdelay": 10,
+        "retrydelay": 10
+    }
+}
