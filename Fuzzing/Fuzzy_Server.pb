@@ -54,8 +54,8 @@ Repeat
 ForEver
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 47
-; FirstLine = 1
+; CursorPosition = 45
+; FirstLine = 2
 ; Folding = -
 ; EnableThread
 ; EnableXP

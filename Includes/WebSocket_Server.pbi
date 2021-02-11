@@ -102,7 +102,7 @@
 ; 
 ; - Dev (10.02.2021)
 ;   - Use Autobahn|Testsuite for fuzzing
-;   - Fix test case 1.1.1
+;   - Fix most test cases
 ;   - Fix how server closes the connection on client request
 ;   - Fix data frame length encoding for transmitted frames
 ;   - Limit the payload size of control frames (defined by websocket standard)
@@ -121,6 +121,11 @@
 ;   - Allow fragmented messages to have a payload of 0 length
 ;		- Add close status code enumeration
 ;		- Add status code and reason to client disconnect
+;   - Add Client_Disconnect_Mutexless
+;   - Use default disconnect reason of 0, which means no reason at all
+;   - Remove all other (unsent) TX_Frame elements before sending a disconnect control frame
+;   - Add reason to Client_Disconnect
+;   - Close connection with correct status code in case of error
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -206,7 +211,7 @@ DeclareModule WebSocket_Server
    
   Declare   Event_Callback(*Object, *Callback.Event_Callback)                               				; Checks for events, and calls the *Callback function if there are any.
   
-  Declare   Client_Disconnect(*Object, *Client, StatusCode.u=#CloseStatusCode_Normal, reason.s="")	; Disconnects the specified *Client.
+  Declare   Client_Disconnect(*Object, *Client, statusCode.u=0, reason.s="")												; Disconnects the specified *Client.
   
 EndDeclareModule
 
@@ -318,7 +323,8 @@ Module WebSocket_Server
   
   ; ##################################################### Declares ####################################################
   
-  Declare   Frame_Send_Mutexless(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
+  Declare   Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
+  Declare   Client_Disconnect_Mutexless(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
   
   ; ##################################################### Procedures ##################################################
   
@@ -579,7 +585,7 @@ Module WebSocket_Server
       
       ; #### Check if the frame exceeds the max. frame-size.
       If *TempFrame\Payload_Size > *Object\Frame_Payload_Max
-        *Client\Event_Disconnect_Manually = #True
+        Client_Disconnect_Mutexless(*Object, *Client, #CloseStatusCode_SizeLimit)
         ProcedureReturn #False
       EndIf
       
@@ -587,7 +593,7 @@ Module WebSocket_Server
       If *TempFrame\Payload_Size > #Frame_Control_Payload_Max
       	; #### Control frames are identified by opcodes where the most significant bit of the opcode is 1.
       	If *TempFrame\RxTx_Pos >= 1 And *TempFrame\Data\Byte[0] & %00001000 = %1000
-      		*Client\Event_Disconnect_Manually = #True
+      		Client_Disconnect_Mutexless(*Object, *Client, #CloseStatusCode_ProtocolError)
         	ProcedureReturn #False
       	EndIf
       EndIf
@@ -860,9 +866,20 @@ Module WebSocket_Server
       Payload_Size = 0
     EndIf
     
+    ; #### Special case: Connection close request (or answer).
     If Opcode = #Opcode_Connection_Close
     	*Client\Event_Disconnect_Manually = #True
-    	; TODO: Remove all other not yet sent frames
+    	
+    	; #### Remove all TX_Frame elements (Except the one that is being sent right now).
+    	While LastElement(*Client\TX_Frame())
+    		If *Client\TX_Frame()\RxTx_Pos > 0
+    			Break
+    		EndIf
+    		If *Client\TX_Frame()\Data
+    			FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
+    		EndIf
+    		DeleteElement(*Client\TX_Frame())
+    	Wend
     EndIf
     
     LastElement(*Client\TX_Frame())
@@ -1048,13 +1065,18 @@ Module WebSocket_Server
 	        Select Event_Frame\Opcode
 	          Case #Opcode_Continuation       ; continuation frame
 	          Case #Opcode_Text               ; text frame
+	          	; TODO: Check if payload is a valid UTF-8 string and contains valid code points (There may be a corner case when frame fragments are split between code points)
 	          Case #Opcode_Binary             ; binary frame
 	          Case #Opcode_Connection_Close   ; connection close
+	          	Protected statusCode.u, reason.s
 	          	If Event_Frame\Payload_Size >= 2
-	            	Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, Event_Frame\Payload, 2) ; This will also set the \Event_Disconnect_Manually flag
-	            Else
-	            	Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
-	            EndIf
+	          		statusCode = PeekU(Event_Frame\Payload)
+	          		statusCode = ((statusCode & $FF00) >> 8) | ((statusCode & $FF) << 8)
+	          		reason = PeekS(Event_Frame\Payload + 2, Event_Frame\Payload_Size - 2, #PB_UTF8 | #PB_ByteLength)
+	          	EndIf
+	          	; TODO: Check if status code is valid
+	          	; TODO: Check if reason is a valid UTF-8 string and contains valid code points
+	          	Client_Disconnect_Mutexless(*Object, *Client, statusCode, reason)
 	          Case #Opcode_Ping               ; ping
 	            Frame_Send_Mutexless(*Object, *Client, #True, 0, #Opcode_Pong, Event_Frame\Payload, Event_Frame\Payload_Size)
 	          Case #Opcode_Pong               ; pong
@@ -1156,7 +1178,7 @@ Module WebSocket_Server
 	      
         If MalformedFrame
         	; #### Close connection as the frame is malformed in some way.
-		      *Client\Event_Disconnect_Manually = #True
+		      Client_Disconnect_Mutexless(*Object, *Client, #CloseStatusCode_ProtocolError)
 		      UnlockMutex(*Object\Mutex)
         Else
         	; #### Forward event to application/user.
@@ -1177,7 +1199,7 @@ Module WebSocket_Server
     ProcedureReturn #False
   EndProcedure
   
-  Procedure Client_Disconnect(*Object.Object, *Client.Client, statusCode.u=#CloseStatusCode_Normal, reason.s="")
+  Procedure Client_Disconnect_Mutexless(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
     If Not *Object
       ProcedureReturn #False
     EndIf
@@ -1186,10 +1208,17 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
-    Protected bigEndianStatusCode.u = ((StatusCode & $FF00) >> 8) | ((StatusCode & $FF) << 8)
-    ; TODO: Add reason string to disconnect frame
-    
-    Frame_Send(*Object, *Client, 1, 0, #Opcode_Connection_Close, @bigEndianStatusCode, SizeOf(bigEndianStatusCode)) ; This will also set the \Event_Disconnect_Manually flag
+    If statusCode
+    	Protected tempSize = 2 + StringByteLength(reason, #PB_UTF8)
+    	Protected *tempMemory = AllocateMemory(tempSize)
+    	PokeU(*tempMemory, ((statusCode & $FF00) >> 8) | ((statusCode & $FF) << 8))
+    	If StringByteLength(reason, #PB_UTF8) > 0
+    		PokeS(*tempMemory + 2, reason, -1, #PB_UTF8 | #PB_String_NoZero)
+    	EndIf
+    	Frame_Send_Mutexless(*Object, *Client, 1, 0, #Opcode_Connection_Close, *tempMemory, tempSize) ; This will also set the \Event_Disconnect_Manually flag
+    Else
+    	Frame_Send_Mutexless(*Object, *Client, 1, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
+    EndIf
     
     ; #### Signal that there >may< be events to be handled by the event thread
     If *Object\Event_Semaphore
@@ -1197,6 +1226,20 @@ Module WebSocket_Server
     EndIf
     
     ProcedureReturn #True
+  EndProcedure
+  
+  Procedure Client_Disconnect(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
+  	Protected Result
+    
+    If Not *Object
+      ProcedureReturn #False
+    EndIf
+    
+    LockMutex(*Object\Mutex)
+    Result = Client_Disconnect_Mutexless(*Object, *Client, statusCode, reason)
+    UnlockMutex(*Object\Mutex)
+    
+    ProcedureReturn Result
   EndProcedure
   
   Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
@@ -1278,8 +1321,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 122
-; FirstLine = 76
+; CursorPosition = 126
+; FirstLine = 105
 ; Folding = ---
 ; EnableThread
 ; EnableXP
