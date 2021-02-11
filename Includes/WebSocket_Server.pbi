@@ -84,7 +84,7 @@
 ; - V1.003 (09.02.2021)
 ;   - Fix typos and misspelled words
 ;   - Remove Event_Disconnect field from client
-;   - Don't break loop in Thread_Receive_Frame() after every packet
+;   - Don't break loop in Thread_Receive_Frame() after every frame
 ;   - Remove some commented code
 ;   - Add mutexless variant of Frame_Send() for internal use
 ;   - Fix a race condition that may happen when using Client_Disconnect()
@@ -93,7 +93,7 @@
 ;   - Set Event_Disconnect_Manually flag inside of Frame_Send() and Frame_Send_Mutexless()
 ;   - Remove the Done field from Frames
 ;   - Add *New_RX_FRAME to client
-;   - Simplify how packets are received
+;   - Simplify how frames are received
 ;   - Check result of all AllocateMemory and AllocateStructure calls
 ;   - Null any freed memory or structure pointer
 ;   - Prevent client to receive HTTP header if there is a forced disconnect
@@ -104,15 +104,20 @@
 ;   - Use Autobahn|Testsuite for fuzzing
 ;   - Fix test case 1.1.1
 ;   - Fix how server closes the connection on client request
-;   - Fix data frame length encoding for transmitted packets
+;   - Fix data frame length encoding for transmitted frames
 ;   - Limit the payload size of control frames (defined by websocket standard)
 ;   - Free semaphore right before the server thread ends, not when the event thread ends
 ;   - Move built in frame actions (ping and disconnect request handling) into Event_Callback so the actions stay in sync with everything else
-;   - Send signal to event thread every time a packet has been sent
+;   - Send signal to event thread every time a frame has been sent
 ;   - Use local pointer to frame data in Event_Callback
 ;   - Get rid of unnecessary second FirstElement()
 ;   - Check if control frames are fragmented
 ;   - Don't execute frame actions on malformed frames
+;   - Add a fragmented payload limit
+;   - Add a FrameData field that contains the raw frame Data
+;   - Add HandleFragmentation parameter to Create
+;   - Add Fragments List to client, that stores a fragment frame series
+;   - Add logic to combine fragmented frames
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -149,8 +154,9 @@ DeclareModule WebSocket_Server
   #RSV2 = %00000010
   #RSV3 = %00000001
   
-  #Frame_Payload_Max = 10000000    ; Default max. size of an incoming frame's payload. If the payload exceeds this value, the client will be disconnected.
-  #Frame_Control_Payload_Max = 125 ; Max. allowed amount of bytes in the payload of control frames. This is defined by the websocket standard.
+  #Frame_Payload_Max = 10000000    					; Default max. size of an incoming frame's payload. If the payload exceeds this value, the client will be disconnected.
+  #Frame_Fragmented_Payload_Max = 100000000 ; Default max. size of the total payload of a series of frame fragments. If the payload exceeds this value, the client will be disconnected. If the user/application needs more, it has To handle fragmentation on its own.
+  #Frame_Control_Payload_Max = 125 					; Max. allowed amount of bytes in the payload of control frames. This is defined by the websocket standard.
   
   ; ##################################################### Public Structures ###########################################
   
@@ -161,6 +167,8 @@ DeclareModule WebSocket_Server
     
     *Payload
     Payload_Size.i
+    
+    *FrameData						; Raw frame data. don't use this, you should use the *Payload instead.
   EndStructure
   
   ; ##################################################### Public Variables ############################################
@@ -171,7 +179,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Procedures (Declares) ################################
   
-  Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
+  Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
   Declare   Free(*Object)                                                                   ; Closes the WebSocket server.
   
   Declare   Frame_Text_Send(*Object, *Client, Text.s)                                       ; Sends a text-frame.
@@ -254,6 +262,9 @@ Module WebSocket_Server
     List RX_Frame.Frame()   ; List of fully received incoming frames (They need to be passed to the user of this library).
     List TX_Frame.Frame()   ; List of outgoing frames. First one is currently being sent.
     
+    List Fragments.Event_Frame()	; List of (parsed) fragment frames. A series of fragments will be stored here temporarily.
+    Fragments_Size.q							; Total size sum of all fragments.
+    
     Mode.i
     
     Event_Connect.i               ; #True --> Generate connect callback.
@@ -275,7 +286,8 @@ Module WebSocket_Server
     
     *Event_Thread_Callback.Event_Callback
     
-    Frame_Payload_Max.q     ; Max-Size of a incoming frames payload. If the frame exceeds this value, the client will be disconnected.
+    Frame_Payload_Max.q     ; Max-Size of an incoming frame's payload. If the frame exceeds this value, the client will be disconnected.
+    HandleFragmentation.i   ; Let the library handle frame fragmentation. If set to true, the user/application will only receive coalesced frames. If set to false, the user/application has to handle fragmentation (By checking the Fin flag and #Opcode_Continuation)
     
     Mutex.i
     
@@ -360,6 +372,14 @@ Module WebSocket_Server
       	FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
       EndIf
       DeleteElement(*Client\TX_Frame())
+    Wend
+    
+    ; #### Free all Fragments()
+    While FirstElement(*Client\Fragments())
+    	If *Client\Fragments()\FrameData
+      	FreeMemory(*Client\Fragments()\FrameData) : *Client\Fragments()\FrameData = #Null
+      EndIf
+      DeleteElement(*Client\Fragments())
     Wend
     
     ; #### Free HTTP header data, if still present
@@ -528,7 +548,7 @@ Module WebSocket_Server
     	
     	; #### Create new temporary frame if there is none yet.
     	If Not *Client\New_RX_FRAME
-	    	*Client\New_RX_FRAME = AllocateStructure(Frame) ; This will be purged when the packet is fully received, when the client is deleted or when the server is freed.
+	    	*Client\New_RX_FRAME = AllocateStructure(Frame) ; This will be purged when the frame is fully received, when the client is deleted or when the server is freed.
 	    	If Not *Client\New_RX_FRAME
 	    		*Client\Event_Disconnect_Manually = #True
 	    		ProcedureReturn #False
@@ -652,12 +672,13 @@ Module WebSocket_Server
         
         ; #### Move this frame into the RX_Frame list.
         LastElement(*Client\RX_Frame())
-        AddElement(*Client\RX_Frame())
-        *Client\RX_Frame()\Data = *TempFrame\Data
-        *Client\RX_Frame()\Payload_Pos = *TempFrame\Payload_Pos
-        *Client\RX_Frame()\Payload_Size = *TempFrame\Payload_Size
-        *Client\RX_Frame()\RxTx_Pos = *TempFrame\RxTx_Pos
-        *Client\RX_Frame()\RxTx_Size = *TempFrame\RxTx_Size
+        If AddElement(*Client\RX_Frame())
+	        *Client\RX_Frame()\Data = *TempFrame\Data
+	        *Client\RX_Frame()\Payload_Pos = *TempFrame\Payload_Pos
+	        *Client\RX_Frame()\Payload_Size = *TempFrame\Payload_Size
+	        *Client\RX_Frame()\RxTx_Pos = *TempFrame\RxTx_Pos
+	        *Client\RX_Frame()\RxTx_Size = *TempFrame\RxTx_Size
+        EndIf
         
         ; #### Remove temporary frame, but don't free the memory, as it is used in the RX_Frame list now.
         FreeStructure(*Client\New_RX_FRAME) : *Client\New_RX_FRAME = #Null
@@ -720,8 +741,9 @@ Module WebSocket_Server
             
           Case #PB_NetworkEvent_Connect
             LastElement(*Object\Client())
-            AddElement(*Object\Client())
-            *Object\Client()\ID = EventClient()
+            If AddElement(*Object\Client())
+            	*Object\Client()\ID = EventClient()
+            EndIf
             Counter + 1
             
           Case #PB_NetworkEvent_Disconnect
@@ -917,7 +939,8 @@ Module WebSocket_Server
     Protected Event_Frame.Event_Frame
     Protected *Client.Client
     Protected *Frame_Data.Frame_Header
-    Protected MalformedFrame.a
+    Protected MalformedFrame.i
+    Protected TempOffset.i
     
     If Not *Object
       ProcedureReturn #False
@@ -957,7 +980,7 @@ Module WebSocket_Server
         ProcedureReturn #True
       EndIf
       
-      ; #### Event: Close connection (By the user of the library, by any error that forces a disconnect or by an incoming disconnect request of the client via ws packet) (Only close the connection if there are no frames left)
+      ; #### Event: Close connection (By the user of the library, by any error that forces a disconnect or by an incoming disconnect request of the client via ws control frame) (Only close the connection if there are no frames left)
       If *Client\Event_Disconnect_Manually And ListSize(*Client\TX_Frame()) = 0 And ListSize(*Client\RX_Frame()) = 0
         ; #### Forward event to application, but only if there was a connect event for this client before
         If *Client\External_Reference
@@ -978,15 +1001,16 @@ Module WebSocket_Server
       
       ; #### Event: Frame available
       If FirstElement(*Client\RX_Frame())
-      	*Frame_Data = *Client\RX_Frame()\Data
+      	*Frame_Data = *Client\RX_Frame()\Data : *Client\RX_Frame()\Data = #Null
       	
         Event_Frame\Fin = *Frame_Data\Byte[0] >> 7 & %00000001
         Event_Frame\RSV = *Frame_Data\Byte[0] >> 4 & %00000111
         Event_Frame\Opcode = *Frame_Data\Byte[0] & %00001111
         Event_Frame\Payload = *Frame_Data + *Client\RX_Frame()\Payload_Pos
         Event_Frame\Payload_Size = *Client\RX_Frame()\Payload_Size
+        Event_Frame\FrameData = *Frame_Data : *Frame_Data = #Null
         
-        ; #### Remove RX_Frame. Its data is freed below, after it has been read by the user/application.
+        ; #### Remove RX_Frame. Its data is either freed below, after it has been read by the user/application, or it is freed in the fragmentation handling code, or when the user is deleted, or when the server is freed.
         DeleteElement(*Client\RX_Frame())
         
         ; #### Check if any extension bit is set. This lib doesn't support any extensions.
@@ -1014,9 +1038,100 @@ Module WebSocket_Server
 	            MalformedFrame = #True
 	        EndSelect
 	      EndIf
-	              
+	      
+	      ; #### Coalesce frame fragments. This will prevent the application/user from receiving fragmented frames.
+	      ; #### Messy code, i wish there was something like go's defer and some other things.
+	      If Not MalformedFrame And *Object\HandleFragmentation
+	      	If Not Event_Frame\Fin
+	      		
+	      		If Event_Frame\Opcode = #Opcode_Continuation
+	      			; #### This frame is in the middle of a fragment series.
+      				If Not LastElement(*Client\Fragments()) Or Not AddElement(*Client\Fragments())
+      					MalformedFrame = #True
+      				Else
+	      				*Client\Fragments() = Event_Frame : Event_Frame\FrameData = #Null : Event_Frame\Payload = #Null
+	      				*Client\Fragments_Size + Event_Frame\Payload_Size
+	      				
+	      				If *Client\Fragments_Size > #Frame_Fragmented_Payload_Max
+				      		MalformedFrame = #True
+				      	Else
+				      		UnlockMutex(*Object\Mutex)
+	      					ProcedureReturn #True ; Don't forward the frame to the user/application.
+				      	EndIf
+				      EndIf
+	      		Else
+	      			; #### This frame is the beginning of a fragment series.
+	      			If ListSize(*Client\Fragments()) > 0
+	      				; #### Another fragment series is already started. Interleaving with other fragments is not allowed.
+	      				MalformedFrame = #True
+	      			Else
+	      				LastElement(*Client\Fragments())
+	      				If Not AddElement(*Client\Fragments())
+	      					MalformedFrame = #True
+	      				Else
+		      				*Client\Fragments() = Event_Frame : Event_Frame\FrameData = #Null : Event_Frame\Payload = #Null
+		      				*Client\Fragments_Size + Event_Frame\Payload_Size
+		      				
+		      				If *Client\Fragments_Size > #Frame_Fragmented_Payload_Max
+					      		MalformedFrame = #True
+					      	Else
+					      		UnlockMutex(*Object\Mutex)
+		      					ProcedureReturn #True ; Don't forward the frame to the user/application.
+					      	EndIf
+					      EndIf
+	      			EndIf
+	      		EndIf
+	      	Else
+	      		If Event_Frame\Opcode = #Opcode_Continuation
+	      			; #### This frame is the end of a fragment series.
+	      			LastElement(*Client\Fragments())
+	    				If Not AddElement(*Client\Fragments())
+	    					MalformedFrame = #True
+	    				Else
+	      				*Client\Fragments() = Event_Frame : Event_Frame\FrameData = #Null : Event_Frame\Payload = #Null
+	      				*Client\Fragments_Size + Event_Frame\Payload_Size
+		      			
+		      			If *Client\Fragments_Size > #Frame_Fragmented_Payload_Max
+				      		MalformedFrame = #True
+				      	Else
+				      		
+				      		; #### Combine fragments, overwrite Event_Frame to simulate one large incoming frame.
+				      		If FirstElement(*Client\Fragments())
+				      			If *Client\Fragments()\Opcode <> #Opcode_Binary And *Client\Fragments()\Opcode <> #Opcode_Text
+				      				MalformedFrame = #True
+				      			Else
+				      				Event_Frame\Fin = #True
+				      				Event_Frame\RSV = 0
+				      				Event_Frame\Opcode = *Client\Fragments()\Opcode
+				      				Event_Frame\FrameData = AllocateMemory(*Client\Fragments_Size)
+				      				Event_Frame\Payload = Event_Frame\FrameData
+				      				Event_Frame\Payload_Size = *Client\Fragments_Size
+				      				If Not Event_Frame\FrameData
+				      					MalformedFrame = #True
+				      				Else
+					      				While FirstElement(*Client\Fragments())
+					      					CopyMemory(*Client\Fragments()\Payload, Event_Frame\Payload + TempOffset, *Client\Fragments()\Payload_Size) : TempOffset + *Client\Fragments()\Payload_Size
+					      					FreeMemory(*Client\Fragments()\FrameData) : *Client\Fragments()\FrameData = #Null
+					      					DeleteElement(*Client\Fragments())
+					      				Wend
+					      			EndIf
+				      			EndIf
+				      		EndIf
+				      		
+				      	EndIf
+				      EndIf
+		      	Else
+		      		; #### This frame is a normal unfragmented frame.
+		      		If Not Bool(Event_Frame\Opcode & %1000) And ListSize(*Client\Fragments()) > 0
+		      			; #### This frame is not a control frame, but there is a started series of fragmented frames.
+		      			MalformedFrame = #True
+		      		EndIf
+		      	EndIf
+		     	EndIf
+	      EndIf
+	      
         If MalformedFrame
-        	; #### Close connection as some extension bit was set.
+        	; #### Close connection as the frame is malformed in some way.
 		      *Client\Event_Disconnect_Manually = #True
 		      UnlockMutex(*Object\Mutex)
         Else
@@ -1025,8 +1140,8 @@ Module WebSocket_Server
 	        *Callback(*Object, *Client, #Event_Frame, Event_Frame)
 	      EndIf
         
-        If *Frame_Data
-        	FreeMemory(*Frame_Data) : *Frame_Data = #Null
+        If Event_Frame\FrameData
+        	FreeMemory(Event_Frame\FrameData) : Event_Frame\FrameData = #Null
         EndIf
         
         ProcedureReturn #True
@@ -1057,7 +1172,7 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
-  Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max)
+  Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
     Protected *Object.Object
     
     *Object = AllocateStructure(Object)
@@ -1106,6 +1221,7 @@ Module WebSocket_Server
     EndIf
     
     *Object\Frame_Payload_Max = Frame_Payload_Max
+    *Object\HandleFragmentation = HandleFragmentation
     *Object\Event_Thread_Callback = *Event_Thread_Callback
     
     ProcedureReturn *Object
@@ -1135,8 +1251,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 114
-; FirstLine = 98
+; CursorPosition = 118
+; FirstLine = 75
 ; Folding = ---
 ; EnableThread
 ; EnableXP
