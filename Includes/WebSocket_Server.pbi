@@ -126,6 +126,9 @@
 ;   - Remove all other (unsent) TX_Frame elements before sending a disconnect control frame
 ;   - Add reason to Client_Disconnect
 ;   - Close connection with correct status code in case of error
+; 
+; - Dev (26.02.2021)
+;   - Use suggested min. size for Base64EncoderBuffer output buffer
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -139,7 +142,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1004
+  #Version = 0
   
   Enumeration
     #Event_None
@@ -363,15 +366,15 @@ Module WebSocket_Server
     Next
     
     ; #### Encode the SHA1 as Base64
-    *Temp_Data_3 = AllocateMemory(30)
+    *Temp_Data_3 = AllocateMemory(64) ; Expected max. size of Base64 encoded string is 27 bytes. But Base64EncoderBuffer has a min. output buffer size of 64 bytes.
     If Not *Temp_Data_3
       FreeMemory(*Temp_Data_2)
       ProcedureReturn ""
     EndIf
     CompilerIf #PB_Compiler_Version < 560
-      Base64Encoder(*Temp_Data_2, 20, *Temp_Data_3, 30)
+      Base64Encoder(*Temp_Data_2, 20, *Temp_Data_3, 64)
     CompilerElse
-      Base64EncoderBuffer(*Temp_Data_2, 20, *Temp_Data_3, 30)
+      Base64EncoderBuffer(*Temp_Data_2, 20, *Temp_Data_3, 64)
     CompilerEndIf
     
     Result = PeekS(*Temp_Data_3, -1, #PB_Ascii)
@@ -1318,8 +1321,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 126
-; FirstLine = 90
+; CursorPosition = 144
+; FirstLine = 108
 ; Folding = ---
 ; EnableThread
 ; EnableXP
