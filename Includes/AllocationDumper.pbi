@@ -28,13 +28,13 @@ Procedure _FreeStructure(*mem, line.i)
     Debug "Trying to free null pointer structure at line " + line
   EndIf
   LockMutex(MemoryAllocationMutex)
-  FreeStructure(*mem)
   If FindMapElement(MemoryAllocations(), Str(*mem))
     DeleteMapElement(MemoryAllocations())
   Else
     Debug "Freed an unknown structure address at line " + line
   EndIf
   UnlockMutex(MemoryAllocationMutex)
+  FreeStructure(*mem)
 EndProcedure
 Macro FreeStructure(mem)
   _FreeStructure(mem, #PB_Compiler_Line)
@@ -94,7 +94,6 @@ Procedure _FreeMemory(*mem, line.i)
   If FindMapElement(MemoryAllocations(), Str(*mem))
     MemoryAllocations()\State = 1
   EndIf
-  FreeMemory(*mem)
   If FindMapElement(MemoryAllocations(), Str(*mem))
     MemoryAllocations()\State = 2
   EndIf
@@ -104,6 +103,7 @@ Procedure _FreeMemory(*mem, line.i)
     Debug "Freed an unknown memory address at line " + line
   EndIf
   UnlockMutex(MemoryAllocationMutex)
+  FreeMemory(*mem)
 EndProcedure
 Macro FreeMemory(mem)
   _FreeMemory(mem, #PB_Compiler_Line)
@@ -128,7 +128,7 @@ EndProcedure
 
 CreateThread(@AllocationDumper_Thread(), #Null)
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 30
-; FirstLine = 9
+; CursorPosition = 105
+; FirstLine = 60
 ; Folding = ---
 ; EnableXP
