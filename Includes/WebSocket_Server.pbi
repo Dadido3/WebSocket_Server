@@ -94,7 +94,7 @@
 ;   - Remove the Done field from Frames
 ;   - Add *New_RX_FRAME to client
 ;   - Simplify how frames are received
-;   - Check result of all AllocateMemory and _AllocateStructure calls
+;   - Check result of all AllocateMemory and AllocateStructure calls
 ;   - Null any freed memory or structure pointer
 ;   - Prevent client to receive HTTP header if there is a forced disconnect
 ;   - Limit HTTP header allocation size
@@ -235,7 +235,8 @@ Module WebSocket_Server
   
   EnableExplicit
   
-  XIncludeFile "AllocationDumper.pbi"
+  ; #### Only use this for debugging purposes.
+  ;XIncludeFile "AllocationDumper.pbi"
   
   InitNetwork()
   UseSHA1Fingerprint()
@@ -659,7 +660,7 @@ Module WebSocket_Server
       
       ; #### Create new temporary frame if there is none yet.
       If Not *Client\New_RX_FRAME
-        *Client\New_RX_FRAME = _AllocateStructure(Frame) ; This will be purged when the frame is fully received, when the client is deleted or when the server is freed.
+        *Client\New_RX_FRAME = AllocateStructure(Frame) ; This will be purged when the frame is fully received, when the client is deleted or when the server is freed.
         If Not *Client\New_RX_FRAME
           *Client\Event_Disconnect_Manually = #True : ClientQueueEnqueue(*Object, *Client)
           ProcedureReturn #False
@@ -1372,7 +1373,7 @@ Module WebSocket_Server
   Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
     Protected *Object.Object
     
-    *Object = _AllocateStructure(Object)
+    *Object = AllocateStructure(Object)
     If Not *Object
       ProcedureReturn #Null
     EndIf
@@ -1404,14 +1405,14 @@ Module WebSocket_Server
       ProcedureReturn #Null
     EndIf
     
-    ;*Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
-    ;If Not *Object\Network_Thread_ID
-    ;  FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-    ;  If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
-    ;  CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
-    ;  FreeStructure(*Object)
-    ;  ProcedureReturn #Null
-    ;EndIf
+    *Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
+    If Not *Object\Network_Thread_ID
+      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
+      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
+      CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
+      FreeStructure(*Object)
+      ProcedureReturn #Null
+    EndIf
     
     If *Event_Thread_Callback
       *Object\Event_Thread_ID = CreateThread(@Thread_Events(), *Object)
@@ -1420,8 +1421,6 @@ Module WebSocket_Server
         ProcedureReturn #Null
       EndIf
     EndIf
-    
-    Thread(*Object)
     
     ProcedureReturn *Object
   EndProcedure
@@ -1450,8 +1449,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 1414
-; FirstLine = 1397
+; CursorPosition = 131
+; FirstLine = 96
 ; Folding = ----
 ; EnableThread
 ; EnableXP
