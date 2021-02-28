@@ -5,7 +5,6 @@ Global MemoryAllocationMutex = CreateMutex()
 Structure MemoryAllocation
   Line.i
   Size.i
-  State.i
 EndStructure
 Global NewMap MemoryAllocations.MemoryAllocation()
 
@@ -61,13 +60,13 @@ Procedure _ReAllocateMemory(*mem, size.i, line.i)
     Debug "Trying to reallocate null pointer memory at line " + line
   EndIf
   LockMutex(MemoryAllocationMutex)
-  If FindMapElement(MemoryAllocations(), Str(*mem))
-    MemoryAllocations()\State = 1
-  EndIf
+  ;If FindMapElement(MemoryAllocations(), Str(*mem))
+  ;  MemoryAllocations()\State = 1
+  ;EndIf
   Protected *newMem = ReAllocateMemory(*mem, size)
-  If FindMapElement(MemoryAllocations(), Str(*mem))
-    MemoryAllocations()\State = 2
-  EndIf
+  ;If FindMapElement(MemoryAllocations(), Str(*mem))
+  ;  MemoryAllocations()\State = 2
+  ;EndIf
   If *newMem
     If FindMapElement(MemoryAllocations(), Str(*mem))
       DeleteMapElement(MemoryAllocations())
@@ -91,12 +90,12 @@ Procedure _FreeMemory(*mem, line.i)
     Debug "Trying to free null pointer memory at line " + line
   EndIf
   LockMutex(MemoryAllocationMutex)
-  If FindMapElement(MemoryAllocations(), Str(*mem))
-    MemoryAllocations()\State = 1
-  EndIf
-  If FindMapElement(MemoryAllocations(), Str(*mem))
-    MemoryAllocations()\State = 2
-  EndIf
+  ;If FindMapElement(MemoryAllocations(), Str(*mem))
+  ;  MemoryAllocations()\State = 1
+  ;EndIf
+  ;If FindMapElement(MemoryAllocations(), Str(*mem))
+  ;  MemoryAllocations()\State = 2
+  ;EndIf
   If FindMapElement(MemoryAllocations(), Str(*mem))
     DeleteMapElement(MemoryAllocations())
   Else
@@ -128,7 +127,7 @@ EndProcedure
 
 CreateThread(@AllocationDumper_Thread(), #Null)
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 105
-; FirstLine = 60
+; CursorPosition = 104
+; FirstLine = 75
 ; Folding = ---
 ; EnableXP

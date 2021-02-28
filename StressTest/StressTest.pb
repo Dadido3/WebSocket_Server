@@ -54,9 +54,12 @@ Repeat
 ForEver
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 7
+; CursorPosition = 49
+; FirstLine = 2
 ; Folding = -
 ; EnableThread
 ; EnableXP
-; EnablePurifier = 8,8,4096,8
+; Executable = stress-test-server.exe
+; Debugger = Standalone
+; EnablePurifier = 32,32,4096,2
 ; EnableUnicode
