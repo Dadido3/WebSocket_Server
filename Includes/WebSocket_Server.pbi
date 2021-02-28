@@ -127,7 +127,7 @@
 ;   - Add reason to Client_Disconnect
 ;   - Close connection with correct status code in case of error
 ; 
-; - Dev (28.02.2021)
+; - V1.005 (28.02.2021)
 ;   - Use suggested min. size for Base64EncoderBuffer output buffer
 ;   - Add connect (handshake) and disconnect timeouts
 ;   - Read http header in bigger chunks, assume that clients don't send any data after #CRLF$ #CRLF$
@@ -150,7 +150,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 0
+  #Version = 1005
   
   Enumeration
     #Event_None
