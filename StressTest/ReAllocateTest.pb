@@ -2,6 +2,26 @@
 
 EnableExplicit
 
+;Procedure _ReAllocateMemory(*mem, newSize.i)
+;  Protected *newMem = AllocateMemory(newSize)
+;  If Not *newMem
+;    ProcedureReturn *mem
+;  EndIf
+;  
+;  Protected oldSize.i = MemorySize(*mem)
+;  If oldSize < newSize
+;    CopyMemory(*mem, *newMem, oldSize)
+;  Else
+;    CopyMemory(*mem, *newMem, newSize)
+;  EndIf
+;  
+;  FreeMemory(*mem)
+;  ProcedureReturn *newMem
+;EndProcedure
+;Macro ReAllocateMemory(mem, newSize)
+;  _ReAllocateMemory(mem, newSize)
+;EndMacro
+
 ;Global allocationMutex = CreateMutex()
 
 Procedure TestThread(*Dummy)
@@ -35,10 +55,7 @@ OpenConsole()
 Input()
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 15
+; CursorPosition = 13
 ; Folding = -
-; EnableAsm
 ; EnableThread
-; EnableXP
-; EnableOnError
-; EnablePurifier
+; EnablePurifier = 1,1,64,64
