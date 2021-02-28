@@ -94,7 +94,7 @@
 ;   - Remove the Done field from Frames
 ;   - Add *New_RX_FRAME to client
 ;   - Simplify how frames are received
-;   - Check result of all AllocateMemory and AllocateStructure calls
+;   - Check result of all AllocateMemory and _AllocateStructure calls
 ;   - Null any freed memory or structure pointer
 ;   - Prevent client to receive HTTP header if there is a forced disconnect
 ;   - Limit HTTP header allocation size
@@ -127,7 +127,7 @@
 ;   - Add reason to Client_Disconnect
 ;   - Close connection with correct status code in case of error
 ; 
-; - Dev (27.02.2021)
+; - Dev (28.02.2021)
 ;   - Use suggested min. size for Base64EncoderBuffer output buffer
 ;   - Add connect (handshake) and disconnect timeouts
 ;   - Read http header in bigger chunks, assume that clients don't send any data after #CRLF$ #CRLF$
@@ -135,6 +135,8 @@
 ;   - On forced connection close, dump incoming network data into dummy buffer
 ;   - Enqueue client on every possible action that needs to trigger a Event_Callback call
 ;   - Throttle network thread when client queue is too large, this gives Event_Callback more processing time
+;   - Use allocation dumper to find memory leaks and other memory problems
+;   - Fix possible memory leak in Client_Disconnect_Mutexless()
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -232,6 +234,8 @@ EndDeclareModule
 Module WebSocket_Server
   
   EnableExplicit
+  
+  XIncludeFile "AllocationDumper.pbi"
   
   InitNetwork()
   UseSHA1Fingerprint()
@@ -655,7 +659,7 @@ Module WebSocket_Server
       
       ; #### Create new temporary frame if there is none yet.
       If Not *Client\New_RX_FRAME
-        *Client\New_RX_FRAME = AllocateStructure(Frame) ; This will be purged when the frame is fully received, when the client is deleted or when the server is freed.
+        *Client\New_RX_FRAME = _AllocateStructure(Frame) ; This will be purged when the frame is fully received, when the client is deleted or when the server is freed.
         If Not *Client\New_RX_FRAME
           *Client\Event_Disconnect_Manually = #True : ClientQueueEnqueue(*Object, *Client)
           ProcedureReturn #False
@@ -884,6 +888,9 @@ Module WebSocket_Server
       ; #### Busy when there was at least one network event
       Busy = Bool(Counter > 0)
       
+      ;While Event_Callback(*Object, *Object\Event_Thread_Callback)
+      ;Wend
+      
       LockMutex(*Object\Mutex)
       ;Debug "Queue: " + ListSize(*Object\ClientQueue()) + "  Clients: " + ListSize(*Object\Client())
       ms = ElapsedMilliseconds()
@@ -1060,6 +1067,7 @@ Module WebSocket_Server
     EndIf
     *Temp = AllocateMemory(Temp_Size)
     If Not *Temp
+      *Client\Event_Disconnect_Manually = #True : ClientQueueEnqueue(*Object, *Client)
       ProcedureReturn #False
     EndIf
     
@@ -1330,11 +1338,16 @@ Module WebSocket_Server
     If statusCode
       Protected tempSize = 2 + StringByteLength(reason, #PB_UTF8)
       Protected *tempMemory = AllocateMemory(tempSize)
+      If Not *tempMemory
+        *Client\Event_Disconnect_Manually = #True : ClientQueueEnqueue(*Object, *Client)
+        ProcedureReturn #False
+      EndIf
       PokeU(*tempMemory, ((statusCode & $FF00) >> 8) | ((statusCode & $FF) << 8))
       If StringByteLength(reason, #PB_UTF8) > 0
         PokeS(*tempMemory + 2, reason, -1, #PB_UTF8 | #PB_String_NoZero)
       EndIf
       Frame_Send_Mutexless(*Object, *Client, 1, 0, #Opcode_Connection_Close, *tempMemory, tempSize) ; This will also set the \Event_Disconnect_Manually flag
+      FreeMemory(*tempMemory)
     Else
       Frame_Send_Mutexless(*Object, *Client, 1, 0, #Opcode_Connection_Close, #Null, 0) ; This will also set the \Event_Disconnect_Manually flag
     EndIf
@@ -1359,7 +1372,7 @@ Module WebSocket_Server
   Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
     Protected *Object.Object
     
-    *Object = AllocateStructure(Object)
+    *Object = _AllocateStructure(Object)
     If Not *Object
       ProcedureReturn #Null
     EndIf
@@ -1391,14 +1404,14 @@ Module WebSocket_Server
       ProcedureReturn #Null
     EndIf
     
-    *Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
-    If Not *Object\Network_Thread_ID
-      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
-      CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
-      FreeStructure(*Object)
-      ProcedureReturn #Null
-    EndIf
+    ;*Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
+    ;If Not *Object\Network_Thread_ID
+    ;  FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
+    ;  If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
+    ;  CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
+    ;  FreeStructure(*Object)
+    ;  ProcedureReturn #Null
+    ;EndIf
     
     If *Event_Thread_Callback
       *Object\Event_Thread_ID = CreateThread(@Thread_Events(), *Object)
@@ -1407,6 +1420,8 @@ Module WebSocket_Server
         ProcedureReturn #Null
       EndIf
     EndIf
+    
+    Thread(*Object)
     
     ProcedureReturn *Object
   EndProcedure
@@ -1435,8 +1450,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 133
-; FirstLine = 105
+; CursorPosition = 1414
+; FirstLine = 1397
 ; Folding = ----
 ; EnableThread
 ; EnableXP

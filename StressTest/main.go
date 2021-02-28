@@ -40,19 +40,19 @@ func main() {
 	}
 
 	wg := &sync.WaitGroup{}
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 200; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
 			for true {
 
-				_, err := DoConnectionTest(testOptions)
+				res, err := DoConnectionTest(testOptions)
 				if err != nil {
 					log.Printf("Error: %v", err)
 					time.Sleep(3000 * time.Millisecond)
 				} else {
-					//log.Printf("Full roundtrip latency: %v", res.FullRoundtripLatency)
+					log.Printf("Full roundtrip latency: %v", res.FullRoundtripLatency)
 					time.Sleep(100 * time.Millisecond)
 				}
 
