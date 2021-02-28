@@ -169,17 +169,13 @@ EndProcedure
 OpenConsole()
 
 Repeat
-  Text.s = Input()
+  WebSocket_Server::Worker(*Server)
   
-  LockMutex(Mutex)
-  ForEach Client()
-    WebSocket_Server::Frame_Text_Send(*Server, Client()\WebSocket_Client, Text)
-  Next
-  UnlockMutex(Mutex)
+  Delay(1)
 ForEver
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 166
-; FirstLine = 126
+; CursorPosition = 147
+; FirstLine = 114
 ; Folding = -
 ; EnableThread
 ; EnableXP

@@ -50,16 +50,16 @@ OpenConsole()
 *Server = WebSocket_Server::Create(8090, @WebSocket_Event())
 
 Repeat
-  Delay(10)
+  WebSocket_Server::Worker(*Server)
+  
+  Delay(1)
 ForEver
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 49
+; CursorPosition = 11
 ; FirstLine = 2
 ; Folding = -
-; EnableThread
 ; EnableXP
 ; Executable = stress-test-server.exe
-; Debugger = Standalone
 ; EnablePurifier = 32,32,4096,2
 ; EnableUnicode

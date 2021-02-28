@@ -50,7 +50,9 @@ EndProcedure
 OpenConsole()
 
 Repeat
-  Delay(10)
+  WebSocket_Server::Worker(*Server)
+  
+  Delay(1)
 ForEver
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)

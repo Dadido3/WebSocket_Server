@@ -26,7 +26,7 @@
 ; 
 ; #### WebSocket_Server ####
 ; 
-; Enable Threadsafe!
+; !!! This version doesn't use any threads !!!
 ; 
 ; - Works in unicode and ascii mode
 ; - Works under x86 and x64
@@ -137,12 +137,9 @@
 ;   - Throttle network thread when client queue is too large, this gives Event_Callback more processing time
 ;   - Use allocation dumper to find memory leaks and other memory problems
 ;   - Fix possible memory leak in Client_Disconnect_Mutexless()
+;   - Get rid of any threading
 
 ; ##################################################### Check Compiler options ######################################
-
-CompilerIf Not #PB_Compiler_Thread
-  CompilerError "Thread-Safe is not activated!"
-CompilerEndIf
 
 ; ##################################################### Module ######################################################
 
@@ -217,13 +214,13 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Procedures (Declares) ################################
   
-  Declare.i Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True) ; Creates a new WebSocket server. *Event_Thread_Callback is the callback which will be called out of the server thread.
+  Declare.i Create(Port, *Event_Callback, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)         ; Creates a new WebSocket server. *Event_Callback is the callback which will be called from the Worker function.
   Declare   Free(*Object)                                                                           ; Closes the WebSocket server.
   
   Declare   Frame_Text_Send(*Object, *Client, Text.s)                                               ; Sends a text-frame.
   Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)          ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary.
-   
-  Declare   Event_Callback(*Object, *Callback.Event_Callback)                                       ; Checks for events, and calls the *Callback function if there are any.
+  
+  Declare   Worker(*Object)                                                                         ; Handles network IO, has to be called in the main loop. This will call your event callback function.
   
   Declare   Client_Disconnect(*Object, *Client, statusCode.u=0, reason.s="")                        ; Disconnects the specified *Client.
   
@@ -322,23 +319,13 @@ Module WebSocket_Server
   Structure Object
     Server_ID.i
     
-    Network_Thread_ID.i     ; Thread handling in and outgoing data.
-    
-    Event_Thread_ID.i       ; Thread handling event callbacks and client deletions.
+    *Event_Callback.Event_Callback
     
     List Client.Client()
     List *ClientQueue.Client() ; A queue of clients that need to be processed in Event_Callback().
-    ClientQueueSemaphore.i     ; Semaphore for the client queue.
-    
-    *Event_Thread_Callback.Event_Callback
     
     Frame_Payload_Max.q     ; Max-Size of an incoming frame's payload. If the frame exceeds this value, the client will be disconnected.
     HandleFragmentation.i   ; Let the library handle frame fragmentation. If set to true, the user/application will only receive coalesced frames. If set to false, the user/application has to handle fragmentation (By checking the Fin flag and #Opcode_Continuation)
-    
-    Mutex.i
-    
-    Free_Event.i            ; Free the event thread and its semaphore.
-    Free.i                  ; Free the main networking thread and all the resources.
   EndStructure
   
   ; ##################################################### Variables ###################################################
@@ -348,6 +335,7 @@ Module WebSocket_Server
   
   ; ##################################################### Declares ####################################################
   
+  Declare   Event_Callback(*Object.Object, *Callback.Event_Callback)
   Declare   Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
   Declare   Client_Disconnect_Mutexless(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
   
@@ -376,12 +364,6 @@ Module WebSocket_Server
     If AddElement(*Object\ClientQueue())
       *Client\Enqueued = #True
       *Object\ClientQueue() = *Client
-      
-      If *Object\ClientQueueSemaphore And signal
-        ; #### Set semaphore to 1, but don't increase count above 1.
-        TrySemaphore(*Object\ClientQueueSemaphore)
-        SignalSemaphore(*Object\ClientQueueSemaphore)
-      EndIf
       
       ProcedureReturn #True
     EndIf
@@ -416,11 +398,6 @@ Module WebSocket_Server
     Next
     
     ProcedureReturn #False
-  EndProcedure
-  
-  Procedure ClientQueueWait(*Object.Object)
-    ; #### Wait for signal.
-    WaitSemaphore(*Object\ClientQueueSemaphore)
   EndProcedure
   
   Procedure Client_Free(*Client.Client)
@@ -502,7 +479,7 @@ Module WebSocket_Server
     ProcedureReturn Result
   EndProcedure
   
-  Procedure Thread_Receive_Handshake(*Object.Object, *Client.Client)
+  Procedure Worker_Receive_Handshake(*Object.Object, *Client.Client)
     Protected Result.i
     Protected *Temp_Data
     Protected Temp_Text.s
@@ -640,7 +617,7 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
-  Procedure Thread_Receive_Frame(*Object.Object, *Client.Client)
+  Procedure Worker_Receive_Frame(*Object.Object, *Client.Client)
     Protected Receive_Size.i
     Protected Result.i
     Protected *Temp_Data
@@ -804,7 +781,7 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
-  Procedure Thread_Transmit(*Object.Object, *Client.Client)
+  Procedure Worker_Transmit(*Object.Object, *Client.Client)
     Protected Transmit_Size.i
     Protected Result.i
     
@@ -829,7 +806,7 @@ Module WebSocket_Server
         FreeMemory(*Client\TX_Frame()\Data) : *Client\TX_Frame()\Data = #Null
         DeleteElement(*Client\TX_Frame())
         
-        ; #### The event thread may have to handle stuff, send a signal.
+        ; #### The event handler may have to handle stuff, enqueue the client.
         If ListSize(*Client\TX_Frame()) = 0
           ClientQueueEnqueue(*Object, *Client)
         EndIf
@@ -840,7 +817,7 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
-  Procedure Thread(*Object.Object)
+  Procedure Worker(*Object.Object)
     Protected Busy, Counter, ms
     Protected *Client.Client
     
@@ -848,10 +825,8 @@ Module WebSocket_Server
       ; #### Network Events
       Counter = 0
       Repeat
-        LockMutex(*Object\Mutex)
         Select NetworkServerEvent(*Object\Server_ID)
           Case #PB_NetworkEvent_None
-            UnlockMutex(*Object\Mutex)
             Break
             
           Case #PB_NetworkEvent_Connect
@@ -871,28 +846,22 @@ Module WebSocket_Server
           Case #PB_NetworkEvent_Data
             If Client_Select(*Object, EventClient())
               Select *Object\Client()\Mode
-                Case #Mode_Handshake  : Thread_Receive_Handshake(*Object, *Object\Client())
-                Case #Mode_Frames     : Thread_Receive_Frame(*Object, *Object\Client())
+                Case #Mode_Handshake  : Worker_Receive_Handshake(*Object, *Object\Client())
+                Case #Mode_Frames     : Worker_Receive_Frame(*Object, *Object\Client())
               EndSelect
             EndIf
             Counter + 1
             
         EndSelect
-        UnlockMutex(*Object\Mutex)
-        
-        If ListSize(*Object\ClientQueue()) > 100
-          Delay(1)
-        EndIf
         
       Until Counter > 10
       
       ; #### Busy when there was at least one network event
       Busy = Bool(Counter > 0)
       
-      ;While Event_Callback(*Object, *Object\Event_Thread_Callback)
-      ;Wend
+      While Event_Callback(*Object, *Object\Event_Callback)
+      Wend
       
-      LockMutex(*Object\Mutex)
       ;Debug "Queue: " + ListSize(*Object\ClientQueue()) + "  Clients: " + ListSize(*Object\Client())
       ms = ElapsedMilliseconds()
       ForEach *Object\Client()
@@ -900,7 +869,7 @@ Module WebSocket_Server
         
         ; #### Send Data.
         If *Client\ID
-          Busy | Bool(Thread_Transmit(*Object, *Client) = #False)
+          Busy | Bool(Worker_Transmit(*Object, *Client) = #False)
         EndIf
         
         ; #### Handle timeouts: Check if a client timed out before the handshake was successful.
@@ -913,44 +882,13 @@ Module WebSocket_Server
           ClientQueueEnqueue(*Object, *Client)
         EndIf
       Next
-      UnlockMutex(*Object\Mutex)
       
       ; #### Delay only if there is nothing to do
       If Not Busy
-        Delay(1)
+        Break
       EndIf
       
-    Until *Object\Free
-    
-    CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
-    
-    ; No need to care about the event thread, as it is shut down before cleanup happens here
-    ForEach *Object\Client()
-      ClientQueueRemove(*Object, *Object\Client())
-      Client_Free(*Object\Client())
-    Next
-    
-    If *Object\ClientQueueSemaphore
-      FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null
-    EndIf
-    
-    FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-    FreeStructure(*Object)
-  EndProcedure
-  
-  Procedure Thread_Events(*Object.Object)
-    Repeat
-      ; #### Wait for client queue entries.
-      ClientQueueWait(*Object)
-      
-      ;Debug "New events to process"
-      
-      ; #### Process all events and callbacks. It's important that all events are processed.
-      While Event_Callback(*Object, *Object\Event_Thread_Callback) And Not *Object\Free_Event
-        ;Debug "Processed one event"
-      Wend
-      ;Debug "Processed all events"
-    Until *Object\Free_Event
+    ForEver
   EndProcedure
   
   Procedure Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
@@ -1042,17 +980,7 @@ Module WebSocket_Server
   EndProcedure
   
   Procedure Frame_Send(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
-    Protected Result
-    
-    If Not *Object
-      ProcedureReturn #False
-    EndIf
-    
-    LockMutex(*Object\Mutex)
-    Result = Frame_Send_Mutexless(*Object, *Client, FIN, RSV, Opcode, *Payload, Payload_Size)
-    UnlockMutex(*Object\Mutex)
-    
-    ProcedureReturn Result
+    ProcedureReturn Frame_Send_Mutexless(*Object, *Client, FIN, RSV, Opcode, *Payload, Payload_Size)
   EndProcedure
   
   Procedure Frame_Text_Send(*Object.Object, *Client.Client, Text.s)
@@ -1096,11 +1024,8 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
-    LockMutex(*Object\Mutex)
-    
     *Client = ClientQueueDequeue(*Object)
     If Not *Client
-      UnlockMutex(*Object\Mutex)
       ProcedureReturn #False
     EndIf
     
@@ -1112,13 +1037,11 @@ Module WebSocket_Server
         *Client\ConnectTimeout = 0
         *Client\External_Reference = #True
         ClientQueueEnqueue(*Object, *Client)
-        UnlockMutex(*Object\Mutex)
         *Callback(*Object, *Client, #Event_Connect)
-        LockMutex(*Object\Mutex)
         Continue
       EndIf
       
-      ; #### Connect and handshake timeout. The client will be enqueued for this in Thread().
+      ; #### Connect and handshake timeout. The client will be enqueued for this in Worker().
       If *Client\ConnectTimeout And *Client\ConnectTimeout <= ElapsedMilliseconds()
         *Client\Event_Disconnect_Manually = #True
       EndIf
@@ -1126,9 +1049,7 @@ Module WebSocket_Server
       ; #### Event: Client disconnected (TCP connection got terminated) (Only return this event if there are no incoming frames left to be read by the application)
       If *Client\ID = #Null And ListSize(*Client\RX_Frame()) = 0
         If *Client\External_Reference
-          UnlockMutex(*Object\Mutex)
           *Callback(*Object, *Client, #Event_Disconnect)
-          LockMutex(*Object\Mutex)
         EndIf
         ; #### Delete the client and all its data.
         ClientQueueRemove(*Object, *Client)
@@ -1138,7 +1059,7 @@ Module WebSocket_Server
         Break
       EndIf
       
-      ; #### Disconnect timeout. The client will be enqueued for this in Thread().
+      ; #### Disconnect timeout. The client will be enqueued for this in Worker().
       If *Client\Event_Disconnect_Manually And Not *Client\DisconnectTimeout
         *Client\DisconnectTimeout = ElapsedMilliseconds() + #ClientDisconnectTimeout
       EndIf
@@ -1147,9 +1068,7 @@ Module WebSocket_Server
       If *Client\Event_Disconnect_Manually And (ListSize(*Client\TX_Frame()) = 0 Or *Client\DisconnectTimeout <= ElapsedMilliseconds()) And ListSize(*Client\RX_Frame()) = 0
         ; #### Forward event to application, but only if there was a connect event for this client before
         If *Client\External_Reference
-          UnlockMutex(*Object\Mutex)
           *Callback(*Object, *Client, #Event_Disconnect)
-          LockMutex(*Object\Mutex)
         EndIf
         If *Client\ID
           CloseNetworkConnection(*Client\ID) : *Client\ID = #Null
@@ -1308,9 +1227,7 @@ Module WebSocket_Server
           Client_Disconnect_Mutexless(*Object, *Client, #CloseStatusCode_ProtocolError)
         Else
           ; #### Forward event to application/user.
-          UnlockMutex(*Object\Mutex)
           *Callback(*Object, *Client, #Event_Frame, Event_Frame)
-          LockMutex(*Object\Mutex)
         EndIf
         
         If Event_Frame\FrameData
@@ -1323,7 +1240,6 @@ Module WebSocket_Server
       Break
     ForEver
     
-    UnlockMutex(*Object\Mutex)
     ProcedureReturn #True
   EndProcedure
   
@@ -1357,21 +1273,16 @@ Module WebSocket_Server
   EndProcedure
   
   Procedure Client_Disconnect(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
-    Protected Result
-    
-    If Not *Object
-      ProcedureReturn #False
-    EndIf
-    
-    LockMutex(*Object\Mutex)
-    Result = Client_Disconnect_Mutexless(*Object, *Client, statusCode, reason)
-    UnlockMutex(*Object\Mutex)
-    
-    ProcedureReturn Result
+    ProcedureReturn Client_Disconnect_Mutexless(*Object, *Client, statusCode, reason)
   EndProcedure
   
-  Procedure Create(Port, *Event_Thread_Callback.Event_Callback=#Null, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
+  Procedure Create(Port, *Event_Callback, Frame_Payload_Max.q=#Frame_Payload_Max, HandleFragmentation=#True)
     Protected *Object.Object
+    
+    If Not *Event_Callback
+      Debug "Missing *Event_Callback"
+      ProcedureReturn #Null
+    EndIf
     
     *Object = AllocateStructure(Object)
     If Not *Object
@@ -1380,46 +1291,12 @@ Module WebSocket_Server
     
     *Object\Frame_Payload_Max = Frame_Payload_Max
     *Object\HandleFragmentation = HandleFragmentation
-    *Object\Event_Thread_Callback = *Event_Thread_Callback
-    
-    *Object\Mutex = CreateMutex()
-    If Not *Object\Mutex
-      FreeStructure(*Object)
-      ProcedureReturn #Null
-    EndIf
-    
-    If *Event_Thread_Callback
-      *Object\ClientQueueSemaphore = CreateSemaphore()
-      If Not *Object\ClientQueueSemaphore
-        FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-        FreeStructure(*Object)
-        ProcedureReturn #Null
-      EndIf
-    EndIf
+    *Object\Event_Callback = *Event_Callback
     
     *Object\Server_ID = CreateNetworkServer(#PB_Any, Port, #PB_Network_TCP)
     If Not *Object\Server_ID
-      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
       FreeStructure(*Object)
       ProcedureReturn #Null
-    EndIf
-    
-    *Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
-    If Not *Object\Network_Thread_ID
-      FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
-      CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
-      FreeStructure(*Object)
-      ProcedureReturn #Null
-    EndIf
-    
-    If *Event_Thread_Callback
-      *Object\Event_Thread_ID = CreateThread(@Thread_Events(), *Object)
-      If Not *Object\Event_Thread_ID
-        *Object\Free = #True
-        ProcedureReturn #Null
-      EndIf
     EndIf
     
     ProcedureReturn *Object
@@ -1430,18 +1307,14 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
-    ; #### Fetch thread ID here, because the *Object is invalid some time after *Object\Free is set true
-    Protected Network_Thread_ID.i = *Object\Network_Thread_ID
+    CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
     
-    If *Object\Event_Thread_ID
-      *Object\Free_Event = #True
-      SignalSemaphore(*Object\ClientQueueSemaphore) ; Misuse the semaphore to get the event thread to quit.
-      WaitThread(*Object\Event_Thread_ID)
-    EndIf
-    *Object\Free = #True
-    If Network_Thread_ID
-      WaitThread(Network_Thread_ID)
-    EndIf
+    ForEach *Object\Client()
+      ClientQueueRemove(*Object, *Object\Client())
+      Client_Free(*Object\Client())
+    Next
+    
+    FreeStructure(*Object)
     
     ProcedureReturn #True
   EndProcedure
@@ -1449,8 +1322,8 @@ Module WebSocket_Server
 EndModule
 
 ; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 131
-; FirstLine = 96
+; CursorPosition = 203
+; FirstLine = 190
 ; Folding = ----
 ; EnableThread
 ; EnableXP
