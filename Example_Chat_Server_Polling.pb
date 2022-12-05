@@ -158,9 +158,9 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
   EndSelect
 EndProcedure
 
-*Server = WebSocket_Server::Create(8090)
-
 OpenConsole()
+
+*Server = WebSocket_Server::Create(8090)
 
 Repeat
   While WebSocket_Server::Event_Callback(*Server, @WebSocket_Event())
@@ -168,9 +168,10 @@ Repeat
   
   Delay(10)
 ForEver
-; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 188
-; FirstLine = 140
+
+; IDE Options = PureBasic 6.00 LTS (Windows - x64)
+; CursorPosition = 160
+; FirstLine = 115
 ; Folding = -
 ; EnableThread
 ; EnableXP

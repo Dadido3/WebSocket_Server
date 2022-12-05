@@ -164,9 +164,9 @@ Procedure WebSocket_Event(*Server, *Client, Event, *Event_Frame.WebSocket_Server
   UnlockMutex(Mutex)
 EndProcedure
 
-*Server = WebSocket_Server::Create(8090, @WebSocket_Event())
-
 OpenConsole()
+
+*Server = WebSocket_Server::Create(8090, @WebSocket_Event())
 
 Repeat
   Text.s = Input()
@@ -177,9 +177,10 @@ Repeat
   Next
   UnlockMutex(Mutex)
 ForEver
-; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 166
-; FirstLine = 126
+
+; IDE Options = PureBasic 6.00 LTS (Windows - x64)
+; CursorPosition = 45
+; FirstLine = 21
 ; Folding = -
 ; EnableThread
 ; EnableXP
