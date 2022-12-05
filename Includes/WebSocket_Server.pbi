@@ -2,7 +2,7 @@
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015-2021 David Vogel
+;     Copyright (c) 2015-2022 David Vogel
 ;     
 ;     Permission is hereby granted, free of charge, to any person obtaining a copy
 ;     of this software and associated documentation files (the "Software"), to deal
@@ -137,6 +137,9 @@
 ;   - Throttle network thread when client queue is too large, this gives Event_Callback more processing time
 ;   - Use allocation dumper to find memory leaks and other memory problems
 ;   - Fix possible memory leak in Client_Disconnect_Mutexless()
+; 
+; - V1.006 (05.12.2022)
+;   - Add Get_HTTP_Header function and make HTTP_Header structure public
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -150,7 +153,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1005
+  #Version = 1006
   
   Enumeration
     #Event_None
@@ -209,6 +212,14 @@ DeclareModule WebSocket_Server
     *FrameData            ; Raw frame data. don't use this, you should use the *Payload instead.
   EndStructure
   
+  Structure HTTP_Header
+    *Data
+    RX_Pos.i
+    
+    Request.s     ; The HTTP request that was originally sent by the client.
+    Map Field.s() ; The HTTP header key value pairs originally sent by the client.
+  EndStructure
+  
   ; ##################################################### Public Variables ############################################
   
   ; ##################################################### Public Prototypes ###########################################
@@ -222,8 +233,10 @@ DeclareModule WebSocket_Server
   
   Declare   Frame_Text_Send(*Object, *Client, Text.s)                                               ; Sends a text-frame.
   Declare   Frame_Send(*Object, *Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)          ; Sends a frame. FIN, RSV and Opcode can be freely defined. Normally you should use #Opcode_Binary.
-   
+  
   Declare   Event_Callback(*Object, *Callback.Event_Callback)                                       ; Checks for events, and calls the *Callback function if there are any.
+  
+  Declare.i Get_HTTP_Header(*Client)                                                                ; Returns a pointer to the HTTP_Header structure that contains the parsed HTTP request of the given client.
   
   Declare   Client_Disconnect(*Object, *Client, statusCode.u=0, reason.s="")                        ; Disconnects the specified *Client.
   
@@ -260,15 +273,6 @@ Module WebSocket_Server
   
   Structure Eight_Bytes
     Byte.a[8]
-  EndStructure
-  
-  Structure HTTP_Header
-    *Data
-    
-    RX_Pos.i
-    
-    Request.s
-    Map Field.s()
   EndStructure
   
   Structure Frame_Header_Length
@@ -1327,6 +1331,14 @@ Module WebSocket_Server
     ProcedureReturn #True
   EndProcedure
   
+  Procedure.i Get_HTTP_Header(*Client.Client)
+    If Not *Client
+      ProcedureReturn #Null
+    EndIf
+    
+    ProcedureReturn *Client\HTTP_Header
+  EndProcedure
+  
   Procedure Client_Disconnect_Mutexless(*Object.Object, *Client.Client, statusCode.u=0, reason.s="")
     If Not *Object
       ProcedureReturn #False
@@ -1448,9 +1460,9 @@ Module WebSocket_Server
   
 EndModule
 
-; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 131
-; FirstLine = 96
+; IDE Options = PureBasic 6.00 LTS (Windows - x64)
+; CursorPosition = 142
+; FirstLine = 120
 ; Folding = ----
 ; EnableThread
 ; EnableXP
