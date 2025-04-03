@@ -53,13 +53,11 @@ Repeat
   Delay(10)
 ForEver
 
-; IDE Options = PureBasic 5.72 (Windows - x64)
-; CursorPosition = 49
-; FirstLine = 2
+; IDE Options = PureBasic 6.20 (Windows - x64)
+; CursorPosition = 7
 ; Folding = -
 ; EnableThread
 ; EnableXP
 ; Executable = stress-test-server.exe
-; Debugger = Standalone
 ; EnablePurifier = 32,32,4096,2
 ; EnableUnicode

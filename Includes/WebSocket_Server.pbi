@@ -2,7 +2,7 @@
 ; 
 ;     The MIT License (MIT)
 ;     
-;     Copyright (c) 2015-2022 David Vogel
+;     Copyright (c) 2015-2025 David Vogel
 ;     
 ;     Permission is hereby granted, free of charge, to any person obtaining a copy
 ;     of this software and associated documentation files (the "Software"), to deal
@@ -140,6 +140,13 @@
 ; 
 ; - V1.006 (05.12.2022)
 ;   - Add Get_HTTP_Header function and make HTTP_Header structure public
+; 
+; - V1.007 (04.04.2025)
+;   - Make InitNetwork() conditional.
+;   - Remove event thread, and move the logic into the main thread. There is no advantage in having two threads, because they both use the same mutex. This also prevents internal lock contention.
+;   - Add delay of 0s to help with external lock contention, this is useful when a user calls server API while the server is busy with sending data.
+;   - Increased throughput and lower latency due to two changes mentioned above.
+;   - Remove use of ClientQueueEnqueue(*Object, *Client) outside of the server's mutex. This was only called in case AllocateMemory failed, so basically never.
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -251,7 +258,9 @@ Module WebSocket_Server
   ; #### Only use this for debugging purposes.
   ;XIncludeFile "AllocationDumper.pbi"
   
+CompilerIf #PB_Compiler_Version < 600
   InitNetwork()
+CompilerEndIf
   UseSHA1Fingerprint()
   
   ; ##################################################### Constants ###################################################
@@ -332,7 +341,6 @@ Module WebSocket_Server
     
     List Client.Client()
     List *ClientQueue.Client() ; A queue of clients that need to be processed in Event_Callback().
-    ClientQueueSemaphore.i     ; Semaphore for the client queue.
     
     *Event_Thread_Callback.Event_Callback
     
@@ -371,7 +379,7 @@ Module WebSocket_Server
     ProcedureReturn #False
   EndProcedure
   
-  Procedure ClientQueueEnqueue(*Object.Object, *Client.Client, signal=#True)
+  Procedure ClientQueueEnqueue(*Object.Object, *Client.Client)
     If *Client\Enqueued
       ProcedureReturn #True
     EndIf
@@ -380,13 +388,6 @@ Module WebSocket_Server
     If AddElement(*Object\ClientQueue())
       *Client\Enqueued = #True
       *Object\ClientQueue() = *Client
-      
-      If *Object\ClientQueueSemaphore And signal
-        ; #### Set semaphore to 1, but don't increase count above 1.
-        TrySemaphore(*Object\ClientQueueSemaphore)
-        SignalSemaphore(*Object\ClientQueueSemaphore)
-      EndIf
-      
       ProcedureReturn #True
     EndIf
     
@@ -407,10 +408,6 @@ Module WebSocket_Server
   EndProcedure
   
   Procedure ClientQueueRemove(*Object.Object, *Client.Client)
-    If Not *Client\Enqueued
-      ProcedureReturn #True
-    EndIf
-    
     ForEach *Object\ClientQueue()
       If *Object\ClientQueue() = *Client
         DeleteElement(*Object\ClientQueue())
@@ -420,11 +417,6 @@ Module WebSocket_Server
     Next
     
     ProcedureReturn #False
-  EndProcedure
-  
-  Procedure ClientQueueWait(*Object.Object)
-    ; #### Wait for signal.
-    WaitSemaphore(*Object\ClientQueueSemaphore)
   EndProcedure
   
   Procedure Client_Free(*Client.Client)
@@ -851,11 +843,11 @@ Module WebSocket_Server
     Repeat
       ; #### Network Events
       Counter = 0
+      
+      LockMutex(*Object\Mutex)
       Repeat
-        LockMutex(*Object\Mutex)
         Select NetworkServerEvent(*Object\Server_ID)
           Case #PB_NetworkEvent_None
-            UnlockMutex(*Object\Mutex)
             Break
             
           Case #PB_NetworkEvent_Connect
@@ -882,19 +874,15 @@ Module WebSocket_Server
             Counter + 1
             
         EndSelect
-        UnlockMutex(*Object\Mutex)
-        
-        If ListSize(*Object\ClientQueue()) > 100
-          Delay(1)
-        EndIf
-        
       Until Counter > 10
+      UnlockMutex(*Object\Mutex)
       
-      ; #### Busy when there was at least one network event
+      ; #### Busy when there was at least one network event.
       Busy = Bool(Counter > 0)
       
-      ;While Event_Callback(*Object, *Object\Event_Thread_Callback)
-      ;Wend
+      ; #### Handle the enqueued clients and issue callbacks.
+      While Event_Callback(*Object, *Object\Event_Thread_Callback)
+      Wend
       
       LockMutex(*Object\Mutex)
       ;Debug "Queue: " + ListSize(*Object\ClientQueue()) + "  Clients: " + ListSize(*Object\Client())
@@ -909,6 +897,8 @@ Module WebSocket_Server
         
         ; #### Handle timeouts: Check if a client timed out before the handshake was successful.
         If *Client\ConnectTimeout And *Client\ConnectTimeout <= ms
+          *Client\ConnectTimeout = 0
+          *Client\Event_Disconnect_Manually = #True
           ClientQueueEnqueue(*Object, *Client)
         EndIf
         
@@ -922,39 +912,20 @@ Module WebSocket_Server
       ; #### Delay only if there is nothing to do
       If Not Busy
         Delay(1)
+      Else
+        Delay(0) ; This is better than no delay, otherwise other threads don't have a chance to unlock the mutex.
       EndIf
       
     Until *Object\Free
     
     CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
     
-    ; No need to care about the event thread, as it is shut down before cleanup happens here
     ForEach *Object\Client()
-      ClientQueueRemove(*Object, *Object\Client())
       Client_Free(*Object\Client())
     Next
     
-    If *Object\ClientQueueSemaphore
-      FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null
-    EndIf
-    
     FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
     FreeStructure(*Object)
-  EndProcedure
-  
-  Procedure Thread_Events(*Object.Object)
-    Repeat
-      ; #### Wait for client queue entries.
-      ClientQueueWait(*Object)
-      
-      ;Debug "New events to process"
-      
-      ; #### Process all events and callbacks. It's important that all events are processed.
-      While Event_Callback(*Object, *Object\Event_Thread_Callback) And Not *Object\Free_Event
-        ;Debug "Processed one event"
-      Wend
-      ;Debug "Processed all events"
-    Until *Object\Free_Event
   EndProcedure
   
   Procedure Frame_Send_Mutexless(*Object.Object, *Client.Client, FIN.a, RSV.a, Opcode.a, *Payload, Payload_Size.q)
@@ -1072,7 +1043,6 @@ Module WebSocket_Server
     EndIf
     *Temp = AllocateMemory(Temp_Size)
     If Not *Temp
-      *Client\Event_Disconnect_Manually = #True : ClientQueueEnqueue(*Object, *Client)
       ProcedureReturn #False
     EndIf
     
@@ -1100,6 +1070,10 @@ Module WebSocket_Server
       ProcedureReturn #False
     EndIf
     
+    If *Object\Free
+      ProcedureReturn #False
+    EndIf
+    
     LockMutex(*Object\Mutex)
     
     *Client = ClientQueueDequeue(*Object)
@@ -1115,16 +1089,10 @@ Module WebSocket_Server
         *Client\Event_Connect = #False
         *Client\ConnectTimeout = 0
         *Client\External_Reference = #True
-        ClientQueueEnqueue(*Object, *Client)
         UnlockMutex(*Object\Mutex)
         *Callback(*Object, *Client, #Event_Connect)
         LockMutex(*Object\Mutex)
         Continue
-      EndIf
-      
-      ; #### Connect and handshake timeout. The client will be enqueued for this in Thread().
-      If *Client\ConnectTimeout And *Client\ConnectTimeout <= ElapsedMilliseconds()
-        *Client\Event_Disconnect_Manually = #True
       EndIf
       
       ; #### Event: Client disconnected (TCP connection got terminated) (Only return this event if there are no incoming frames left to be read by the application)
@@ -1181,7 +1149,7 @@ Module WebSocket_Server
         DeleteElement(*Client\RX_Frame())
         
         ; #### Enqueue again. Either because there are still frames to be read by the user, or because there are no frames anymore and the client can disconnect.
-        ClientQueueEnqueue(*Object, *Client)
+        ;ClientQueueEnqueue(*Object, *Client)
         
         ; #### Check if any extension bit is set. This lib doesn't support any extensions.
         If Event_Frame\RSV <> 0
@@ -1400,19 +1368,9 @@ Module WebSocket_Server
       ProcedureReturn #Null
     EndIf
     
-    If *Event_Thread_Callback
-      *Object\ClientQueueSemaphore = CreateSemaphore()
-      If Not *Object\ClientQueueSemaphore
-        FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-        FreeStructure(*Object)
-        ProcedureReturn #Null
-      EndIf
-    EndIf
-    
     *Object\Server_ID = CreateNetworkServer(#PB_Any, Port, #PB_Network_TCP)
     If Not *Object\Server_ID
       FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
       FreeStructure(*Object)
       ProcedureReturn #Null
     EndIf
@@ -1420,18 +1378,9 @@ Module WebSocket_Server
     *Object\Network_Thread_ID = CreateThread(@Thread(), *Object)
     If Not *Object\Network_Thread_ID
       FreeMutex(*Object\Mutex) : *Object\Mutex = #Null
-      If *Object\ClientQueueSemaphore : FreeSemaphore(*Object\ClientQueueSemaphore) : *Object\ClientQueueSemaphore = #Null : EndIf
       CloseNetworkServer(*Object\Server_ID) : *Object\Server_ID = #Null
       FreeStructure(*Object)
       ProcedureReturn #Null
-    EndIf
-    
-    If *Event_Thread_Callback
-      *Object\Event_Thread_ID = CreateThread(@Thread_Events(), *Object)
-      If Not *Object\Event_Thread_ID
-        *Object\Free = #True
-        ProcedureReturn #Null
-      EndIf
     EndIf
     
     ProcedureReturn *Object
@@ -1445,11 +1394,6 @@ Module WebSocket_Server
     ; #### Fetch thread ID here, because the *Object is invalid some time after *Object\Free is set true
     Protected Network_Thread_ID.i = *Object\Network_Thread_ID
     
-    If *Object\Event_Thread_ID
-      *Object\Free_Event = #True
-      SignalSemaphore(*Object\ClientQueueSemaphore) ; Misuse the semaphore to get the event thread to quit.
-      WaitThread(*Object\Event_Thread_ID)
-    EndIf
     *Object\Free = #True
     If Network_Thread_ID
       WaitThread(Network_Thread_ID)
@@ -1459,10 +1403,9 @@ Module WebSocket_Server
   EndProcedure
   
 EndModule
-
-; IDE Options = PureBasic 6.00 LTS (Windows - x64)
-; CursorPosition = 142
-; FirstLine = 120
+; IDE Options = PureBasic 6.20 (Windows - x64)
+; CursorPosition = 130
+; FirstLine = 112
 ; Folding = ----
 ; EnableThread
 ; EnableXP
