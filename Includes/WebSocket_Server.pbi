@@ -147,6 +147,10 @@
 ;   - Add delay of 0s to help with external lock contention, this is useful when a user calls server API while the server is busy with sending data.
 ;   - Increased throughput and lower latency due to two changes mentioned above.
 ;   - Remove use of ClientQueueEnqueue(*Object, *Client) outside of the server's mutex. This was only called in case AllocateMemory failed, so basically never.
+; 
+; - V1.008 (04.04.2025)
+;   - Forgot to increase #Version
+;   - Restore fast path of ClientQueueRemove
 
 ; ##################################################### Check Compiler options ######################################
 
@@ -160,7 +164,7 @@ DeclareModule WebSocket_Server
   
   ; ##################################################### Public Constants ############################################
   
-  #Version = 1006
+  #Version = 1008
   
   Enumeration
     #Event_None
@@ -1408,8 +1412,8 @@ CompilerEndIf
   
 EndModule
 ; IDE Options = PureBasic 6.20 (Windows - x64)
-; CursorPosition = 417
-; FirstLine = 376
+; CursorPosition = 866
+; FirstLine = 851
 ; Folding = ----
 ; EnableThread
 ; EnableXP
