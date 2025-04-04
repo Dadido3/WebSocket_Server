@@ -408,6 +408,10 @@ CompilerEndIf
   EndProcedure
   
   Procedure ClientQueueRemove(*Object.Object, *Client.Client)
+    If Not *Client\Enqueued
+      ProcedureReturn #True
+    EndIf
+    
     ForEach *Object\ClientQueue()
       If *Object\ClientQueue() = *Client
         DeleteElement(*Object\ClientQueue())
@@ -1404,8 +1408,8 @@ CompilerEndIf
   
 EndModule
 ; IDE Options = PureBasic 6.20 (Windows - x64)
-; CursorPosition = 130
-; FirstLine = 112
+; CursorPosition = 417
+; FirstLine = 376
 ; Folding = ----
 ; EnableThread
 ; EnableXP
